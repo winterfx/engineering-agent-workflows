@@ -1,0 +1,24 @@
+{
+  "topic": "webhook.github.issues",
+  "createdAt": "2026-07-24T10:00:00Z",
+  "payload": {
+    "body": {
+      "action": "opened",
+      "issue": {
+        "number": 410,
+        "title": "[API]: payload_json 等结构化字段使用无约束 string",
+        "body": "多个 API 使用 string 承载 JSON，缺少结构约束和兼容性说明。",
+        "state": "open",
+        "html_url": "https://github.com/example/agent-compose/issues/410",
+        "updated_at": "2026-07-24T10:00:00Z",
+        "labels": [{ "name": "enhancement" }],
+        "user": { "login": "example-user", "type": "User" }
+      },
+      "repository": {
+        "full_name": "example/agent-compose",
+        "default_branch": "main"
+      },
+      "sender": { "login": "example-user", "type": "User" }
+    }
+  }
+}

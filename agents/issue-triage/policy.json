@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "duplicateConfidenceThreshold": 0.92,
+  "titleConfidenceThreshold": 0.85,
+  "classificationConfidenceThreshold": 0.75,
+  "priorityConfidenceThreshold": 0.8,
+  "maxCandidates": 20,
+  "maxRelatedIssues": 5,
+  "managedLabelPrefixes": ["priority:", "triage:", "area:"],
+  "labelColors": {
+    "priority:P0": "b60205",
+    "priority:P1": "d93f0b",
+    "priority:P2": "fbca04",
+    "priority:P3": "0e8a16",
+    "priority:pending": "c5def5",
+    "triage:done": "0e8a16",
+    "triage:needs-info": "fbca04",
+    "area:api": "1d76db",
+    "area:cli": "5319e7",
+    "area:runtime": "006b75",
+    "area:reliability": "b60205",
+    "area:docs": "0075ca",
+    "area:general": "d4c5f9",
+    "duplicate": "cfd3d7"
+  }
+}

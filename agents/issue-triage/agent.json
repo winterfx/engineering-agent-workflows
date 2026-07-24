@@ -1,0 +1,16 @@
+{
+  "name": "issue-triage",
+  "description": "Normalize, classify, prioritize, relate, and summarize GitHub issues.",
+  "prompt": "prompt.md",
+  "instructions": "AGENTS.md",
+  "policy": "policy.json",
+  "modelEnv": "ISSUE_TRIAGE_MODEL",
+  "capabilities": {
+    "issueRead": true,
+    "issueTitleWrite": true,
+    "issueLabelWrite": true,
+    "issueCommentWrite": true,
+    "issueClose": false,
+    "repositoryClone": false
+  }
+}

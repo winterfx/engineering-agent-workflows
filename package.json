@@ -1,0 +1,31 @@
+{
+  "name": "engineering-agent-workflows",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "npm run format:check && npm run typecheck && npm test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "start": "tsx src/main.ts",
+    "test": "vitest run test",
+    "test:coverage": "vitest run test --coverage",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@chaitin-ai/agent-compose-runtime-sdk": "^0.7.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "^4.0.0",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
+  }
+}
