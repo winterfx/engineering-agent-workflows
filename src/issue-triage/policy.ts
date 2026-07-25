@@ -1,5 +1,18 @@
+import { z } from "zod";
 import type { IssueCandidate } from "../github/types.js";
 import type { Priority, TriageAnalysis, TriageDecision } from "./schema.js";
+
+export const triagePolicySchema = z.object({
+  version: z.number().int().positive(),
+  duplicateConfidenceThreshold: z.number().min(0).max(1),
+  titleConfidenceThreshold: z.number().min(0).max(1),
+  classificationConfidenceThreshold: z.number().min(0).max(1),
+  priorityConfidenceThreshold: z.number().min(0).max(1),
+  maxCandidates: z.number().int().min(0).max(100),
+  maxRelatedIssues: z.number().int().min(0).max(20),
+  managedLabelPrefixes: z.array(z.string().min(1)),
+  labelColors: z.record(z.string(), z.string().regex(/^[0-9a-fA-F]{6}$/)),
+});
 
 export interface TriagePolicy {
   version: number;

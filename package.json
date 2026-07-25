@@ -7,8 +7,9 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "check": "npm run format:check && npm run typecheck && npm test",
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=agents/issue-triage/scripts/issue-triage.mjs",
+    "build:check": "skill_build_tmp=$(mktemp) && esbuild src/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=$skill_build_tmp >/dev/null && cmp -s $skill_build_tmp agents/issue-triage/scripts/issue-triage.mjs; skill_build_status=$?; rm -f $skill_build_tmp; exit $skill_build_status",
+    "check": "npm run format:check && npm run typecheck && npm test && npm run build:check",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "start": "tsx src/main.ts",
@@ -17,12 +18,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@chaitin-ai/agent-compose-runtime-sdk": "^0.7.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^4.0.0",
+    "esbuild": "^0.28.1",
     "prettier": "^3.6.2",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",

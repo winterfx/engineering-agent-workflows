@@ -39,7 +39,13 @@ export const triageAnalysisSchema = z.object({
   priorityReason: z.string().min(1).max(2000),
 });
 
+export const triageSubmissionSchema = z.object({
+  issueFingerprint: z.string().regex(/^[0-9a-f]{20}$/),
+  analysis: triageAnalysisSchema,
+});
+
 export type TriageAnalysis = z.infer<typeof triageAnalysisSchema>;
+export type TriageSubmission = z.infer<typeof triageSubmissionSchema>;
 
 export type Priority = "P0" | "P1" | "P2" | "P3" | "pending";
 

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { GitHubIssue } from "../github/types.js";
+import type { GitHubComment, GitHubIssue } from "../github/types.js";
 import type { TriageDecision } from "./schema.js";
 
 export const COMMENT_MARKER_PREFIX =
@@ -7,11 +7,20 @@ export const COMMENT_MARKER_PREFIX =
 
 export function issueFingerprint(
   issue: Pick<GitHubIssue, "title" | "body">,
+  comments: Array<Pick<GitHubComment, "id" | "body" | "user">> = [],
 ): string {
   return crypto
     .createHash("sha256")
     .update(
-      JSON.stringify({ title: issue.title.trim(), body: issue.body ?? "" }),
+      JSON.stringify({
+        title: issue.title.trim(),
+        body: issue.body ?? "",
+        comments: comments.map((comment) => ({
+          id: comment.id,
+          body: comment.body,
+          author: comment.user?.login ?? "",
+        })),
+      }),
     )
     .digest("hex")
     .slice(0, 20);

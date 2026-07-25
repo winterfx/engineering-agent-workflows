@@ -2,7 +2,6 @@ import type { GitHubComment, GitHubIssue, IssueCandidate } from "./types.js";
 
 export interface GitHubIssueUpdate {
   title?: string;
-  labels?: string[];
 }
 
 export interface GitHubIssuesClient {
@@ -22,6 +21,16 @@ export interface GitHubIssuesClient {
     issueNumber: number,
     update: GitHubIssueUpdate,
   ): Promise<GitHubIssue>;
+  addLabels(
+    repository: string,
+    issueNumber: number,
+    labels: string[],
+  ): Promise<void>;
+  removeLabel(
+    repository: string,
+    issueNumber: number,
+    label: string,
+  ): Promise<void>;
   createComment(
     repository: string,
     issueNumber: number,
@@ -103,10 +112,15 @@ export class GitHubClient implements GitHubIssuesClient {
     repository: string,
     issueNumber: number,
   ): Promise<GitHubComment[]> {
-    return this.#request<GitHubComment[]>(
-      "GET",
-      `/repos/${repositoryPath(repository)}/issues/${issueNumber}/comments?per_page=100`,
-    );
+    const comments: GitHubComment[] = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.#request<GitHubComment[]>(
+        "GET",
+        `/repos/${repositoryPath(repository)}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
+      );
+      comments.push(...batch);
+      if (batch.length < 100) return comments;
+    }
   }
 
   async ensureLabel(
@@ -139,6 +153,31 @@ export class GitHubClient implements GitHubIssuesClient {
       `/repos/${repositoryPath(repository)}/issues/${issueNumber}`,
       update,
     );
+  }
+
+  async addLabels(
+    repository: string,
+    issueNumber: number,
+    labels: string[],
+  ): Promise<void> {
+    if (labels.length === 0) return;
+    await this.#request(
+      "POST",
+      `/repos/${repositoryPath(repository)}/issues/${issueNumber}/labels`,
+      { labels },
+    );
+  }
+
+  async removeLabel(
+    repository: string,
+    issueNumber: number,
+    label: string,
+  ): Promise<void> {
+    const path = `/repos/${repositoryPath(repository)}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`;
+    const response = await this.#rawRequest("DELETE", path);
+    if (!response.ok && response.status !== 404) {
+      throw await responseError("DELETE", path, response);
+    }
   }
 
   async createComment(
