@@ -1,0 +1,4 @@
+interface:
+  display_name: "Draft PR"
+  short_description: "Implement an approved Issue and prepare a Draft PR"
+  default_prompt: "Use $draft-pr to implement the approved Issue, validate the change, and prepare a Draft PR result."

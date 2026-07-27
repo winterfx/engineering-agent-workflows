@@ -11,6 +11,15 @@ describe("scheduler-bound Issue target", () => {
     ).not.toThrow();
   });
 
+  it("accepts a nested GitLab namespace project path", () => {
+    expect(() =>
+      assertBoundIssueTarget("group/subgroup/project", 410, true, {
+        ISSUE_TRIAGE_EXPECTED_REPOSITORY: "group/subgroup/project",
+        ISSUE_TRIAGE_EXPECTED_ISSUE: "410",
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects a model-selected target that differs from the webhook", () => {
     expect(() =>
       assertBoundIssueTarget("other/repo", 999, true, {

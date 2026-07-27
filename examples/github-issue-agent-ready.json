@@ -1,0 +1,28 @@
+{
+  "topic": "webhook.github.issues",
+  "createdAt": "2026-07-26T12:00:00Z",
+  "payload": {
+    "body": {
+      "action": "labeled",
+      "label": { "name": "agent:ready", "color": "1d76db" },
+      "issue": {
+        "number": 439,
+        "title": "Webhook insert can commit before the request fails",
+        "body": "The endpoint can report HTTP 500 after the INSERT commits.",
+        "state": "open",
+        "html_url": "https://github.com/chaitin/agent-compose/issues/439",
+        "updated_at": "2026-07-26T12:00:00Z",
+        "labels": [
+          { "name": "bug" },
+          { "name": "agent:ready", "color": "1d76db" }
+        ],
+        "user": { "login": "example-user", "type": "User" }
+      },
+      "repository": {
+        "full_name": "chaitin/agent-compose",
+        "default_branch": "main"
+      },
+      "sender": { "login": "maintainer", "type": "User" }
+    }
+  }
+}

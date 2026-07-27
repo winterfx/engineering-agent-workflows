@@ -7,6 +7,6 @@ This repository owns versioned AI engineering workflows. Keep event ingestion th
 - `loaders/` contains minimal agent-compose Scheduler trigger scripts.
 - `test/` covers observable workflow behavior without public network or model calls.
 
-AI output is advisory input. Validate it before performing GitHub writes. Preserve user-authored content and labels unless a documented managed namespace explicitly permits replacement. Never commit credentials or log tokens, webhook secrets, authorization headers, or unfiltered environment values.
+AI output is advisory input. Validate it before performing Git provider writes. Preserve user-authored content and labels unless a documented managed namespace explicitly permits replacement. Never commit credentials or log tokens, webhook secrets, authorization headers, or unfiltered environment values.
 
 Use Node.js 20 or newer, TypeScript strict mode, Prettier, and Vitest. A behavior change requires focused deterministic tests. Run `npm run check` before handoff.

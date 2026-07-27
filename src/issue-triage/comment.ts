@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
-import type { GitHubComment, GitHubIssue } from "../github/types.js";
+import type { Issue, IssueComment } from "../issues/types.js";
 import type { TriageDecision } from "./schema.js";
 
 export const COMMENT_MARKER_PREFIX =
   "<!-- engineering-agent-workflows:issue-triage:v1";
 
 export function issueFingerprint(
-  issue: Pick<GitHubIssue, "title" | "body">,
-  comments: Array<Pick<GitHubComment, "id" | "body" | "user">> = [],
+  issue: Pick<Issue, "title" | "body">,
+  comments: Array<Pick<IssueComment, "id" | "body" | "user">> = [],
 ): string {
   return crypto
     .createHash("sha256")
@@ -43,12 +43,9 @@ export function buildTriageComment(
     commentMarker(issueNumber, fingerprint),
     "## Issue triage",
     "",
-    analysis.summary,
-    "",
     "### Classification",
     "",
-    `- Type: \`${analysis.issueType}\``,
-    `- Area: \`${analysis.area}\``,
+    `- Type: \`${classificationText(decision)}\``,
     `- Priority: \`${decision.priority}\``,
     `- Priority basis: ${analysis.priorityReason}`,
   ];
@@ -58,7 +55,7 @@ export function buildTriageComment(
       "",
       "### Possible duplicate",
       "",
-      `- #${decision.duplicateIssueNumber} (${Math.round(analysis.duplicate.confidence * 100)}% confidence): ${analysis.duplicate.reason}`,
+      `- #${decision.duplicateIssueNumber}: ${analysis.duplicate.reason}`,
     );
   }
 
@@ -66,13 +63,6 @@ export function buildTriageComment(
     lines.push("", "### Related issues", "");
     for (const related of decision.relatedIssues) {
       lines.push(`- #${related.issueNumber}: ${related.reason}`);
-    }
-  }
-
-  if (analysis.acceptanceCriteria.length > 0) {
-    lines.push("", "### Suggested acceptance criteria", "");
-    for (const criterion of analysis.acceptanceCriteria) {
-      lines.push(`- [ ] ${criterion}`);
     }
   }
 
@@ -88,4 +78,11 @@ export function buildTriageComment(
     "_This is an automated initial assessment based on the Issue text and related candidates; no repository code was inspected._",
   );
   return lines.join("\n");
+}
+
+function classificationText(decision: TriageDecision): string {
+  if (decision.classification.label) return decision.classification.label;
+  return decision.classification.source === "conflict"
+    ? "unresolved (conflicting existing labels)"
+    : "unknown";
 }

@@ -1,13 +1,23 @@
 {
   "version": 1,
   "duplicateConfidenceThreshold": 0.92,
-  "titleConfidenceThreshold": 0.85,
   "classificationConfidenceThreshold": 0.75,
   "priorityConfidenceThreshold": 0.8,
   "maxCandidates": 20,
   "maxRelatedIssues": 5,
-  "managedLabelPrefixes": ["priority:", "triage:", "area:"],
+  "skipLabels": ["skip-triage"],
+  "managedLabelPrefixes": ["priority:", "triage:"],
+  "classificationLabels": {
+    "bug": "bug",
+    "enhancement": "enhancement",
+    "documentation": "documentation",
+    "question": "question"
+  },
   "labelColors": {
+    "bug": "d73a4a",
+    "documentation": "0075ca",
+    "enhancement": "a2eeef",
+    "question": "d876e3",
     "priority:P0": "b60205",
     "priority:P1": "d93f0b",
     "priority:P2": "fbca04",
@@ -15,12 +25,20 @@
     "priority:pending": "c5def5",
     "triage:done": "0e8a16",
     "triage:needs-info": "fbca04",
-    "area:api": "1d76db",
-    "area:cli": "5319e7",
-    "area:runtime": "006b75",
-    "area:reliability": "b60205",
-    "area:docs": "0075ca",
-    "area:general": "d4c5f9",
     "duplicate": "cfd3d7"
+  },
+  "labelDescriptions": {
+    "bug": "Something isn't working",
+    "documentation": "Improvements or additions to documentation",
+    "enhancement": "New feature or request",
+    "question": "Further information is requested",
+    "priority:P0": "Automated triage: critical and immediate impact",
+    "priority:P1": "Automated triage: high-priority impact",
+    "priority:P2": "Automated triage: significant impact",
+    "priority:P3": "Automated triage: supported low-impact work",
+    "priority:pending": "Automated triage: priority needs more evidence",
+    "triage:done": "Automated initial triage completed",
+    "triage:needs-info": "Automated triage needs reporter information",
+    "duplicate": "This issue or pull request already exists"
   }
 }

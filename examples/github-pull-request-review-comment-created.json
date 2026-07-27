@@ -1,0 +1,24 @@
+{
+  "action": "created",
+  "comment": {
+    "id": 501,
+    "body": "LastError remains set after recovery finishes.",
+    "path": "pkg/sessions/deletion_recovery.go",
+    "line": 104,
+    "side": "RIGHT",
+    "diff_hunk": "@@ -100,0 +101,4 @@",
+    "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "html_url": "https://github.com/chaitin/agent-compose/pull/440#discussion_r501",
+    "user": {
+      "login": "monkeyscan[bot]",
+      "id": 9001,
+      "type": "Bot"
+    }
+  },
+  "pull_request": {
+    "number": 440
+  },
+  "repository": {
+    "full_name": "chaitin/agent-compose"
+  }
+}

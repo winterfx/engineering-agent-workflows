@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { IssueCandidate } from "../src/github/types.js";
+import type { IssueCandidate } from "../src/issues/types.js";
 import {
   calculatePriority,
   makeDecision,
@@ -11,23 +11,26 @@ import type { TriageAnalysis } from "../src/issue-triage/schema.js";
 const policy: TriagePolicy = {
   version: 1,
   duplicateConfidenceThreshold: 0.92,
-  titleConfidenceThreshold: 0.85,
   classificationConfidenceThreshold: 0.75,
   priorityConfidenceThreshold: 0.8,
   maxCandidates: 20,
   maxRelatedIssues: 5,
-  managedLabelPrefixes: ["priority:", "triage:", "area:"],
+  skipLabels: ["skip-triage"],
+  managedLabelPrefixes: ["priority:", "triage:"],
+  classificationLabels: {
+    bug: "bug",
+    enhancement: "enhancement",
+    documentation: "documentation",
+    question: "question",
+  },
   labelColors: {},
+  labelDescriptions: {},
 };
 
 function analysis(overrides: Partial<TriageAnalysis> = {}): TriageAnalysis {
   return {
-    normalizedTitle: "[API] Define structured payload types",
-    summary: "Structured fields currently use unconstrained strings.",
     issueType: "enhancement",
-    area: "api",
     classificationConfidence: 0.95,
-    titleConfidence: 0.95,
     priorityConfidence: 0.9,
     facts: {
       environment: "unknown",
@@ -42,7 +45,6 @@ function analysis(overrides: Partial<TriageAnalysis> = {}): TriageAnalysis {
     },
     duplicate: { issueNumber: null, confidence: 0, reason: "" },
     relatedIssues: [],
-    acceptanceCriteria: ["Define explicit payload types"],
     missingInformation: ["Does this block an API release?"],
     priorityReason: "No scheduling impact was supplied.",
     ...overrides,
@@ -80,7 +82,7 @@ describe("makeDecision", () => {
       body: "same problem",
       state: "open",
       labels: [],
-      url: "https://github.test/issues/123",
+      url: "https://gitlab.test/example/repo/-/issues/123",
     },
   ];
 
@@ -104,21 +106,75 @@ describe("makeDecision", () => {
       { issueNumber: 123, reason: "valid candidate" },
     ]);
   });
+
+  it("classifies the Issue type using the existing type label taxonomy", () => {
+    const decision = makeDecision(analysis(), candidates, policy);
+
+    expect(decision.labels).toContain("enhancement");
+    expect(decision.classification).toEqual({
+      label: "enhancement",
+      source: "analysis",
+    });
+  });
+
+  it("supports documentation and never creates an unknown type label", () => {
+    const documentation = makeDecision(
+      analysis({ issueType: "documentation" }),
+      candidates,
+      policy,
+    );
+    const unknown = makeDecision(
+      analysis({ issueType: "unknown" }),
+      candidates,
+      policy,
+    );
+
+    expect(documentation.labels).toContain("documentation");
+    expect(unknown.labels).not.toContain("unknown");
+    expect(unknown.classification).toEqual({
+      label: null,
+      source: "unknown",
+    });
+  });
+
+  it("preserves one existing type instead of adding a conflicting analysis", () => {
+    const decision = makeDecision(analysis(), candidates, policy, ["BUG"]);
+
+    expect(decision.classification).toEqual({
+      label: "bug",
+      source: "existing",
+    });
+    expect(decision.labels).not.toContain("enhancement");
+  });
+
+  it("leaves conflicting existing type labels unresolved", () => {
+    const decision = makeDecision(analysis(), candidates, policy, [
+      "bug",
+      "enhancement",
+    ]);
+
+    expect(decision.classification).toEqual({
+      label: null,
+      source: "conflict",
+    });
+    expect(decision.labels).not.toContain("bug");
+    expect(decision.labels).not.toContain("enhancement");
+  });
 });
 
 describe("mergeManagedLabels", () => {
-  it("replaces managed namespaces and preserves human labels", () => {
+  it("replaces managed namespaces while leaving area labels unmanaged", () => {
     expect(
       mergeManagedLabels(
         ["enhancement", "priority:P3", "area:legacy", "customer-important"],
-        ["priority:P2", "area:api", "triage:done"],
+        ["priority:P2", "triage:done"],
         policy.managedLabelPrefixes,
       ),
     ).toEqual([
       "enhancement",
+      "area:legacy",
       "customer-important",
       "priority:P2",
-      "area:api",
       "triage:done",
     ]);
   });

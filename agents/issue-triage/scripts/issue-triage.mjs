@@ -23,16 +23,18 @@ var GitHubClient = class {
     this.#fetch = options.fetch ?? fetch;
   }
   async getIssue(repository, issueNumber) {
-    return this.#request(
+    const issue2 = await this.#request(
       "GET",
       `/repos/${repositoryPath(repository)}/issues/${issueNumber}`
     );
+    if (issue2.pull_request) {
+      throw new Error("GitHub pull request payload is not an Issue");
+    }
+    return normalizeIssue(issue2);
   }
   async searchCandidates(repository, issue2, limit) {
     const title = searchText(issue2.title);
-    if (!title) {
-      return [];
-    }
+    if (!title) return [];
     const query = new URLSearchParams({
       q: `repo:${repository} is:issue in:title ${title}`,
       per_page: String(Math.min(Math.max(limit + 1, 1), 100))
@@ -48,9 +50,7 @@ var GitHubClient = class {
       title: candidate.title,
       body: truncate(candidate.body ?? "", 4e3),
       state: candidate.state,
-      labels: candidate.labels.map(
-        (label) => typeof label === "string" ? label : label.name
-      ),
+      labels: labelNames(candidate.labels),
       url: candidate.html_url
     }));
   }
@@ -61,31 +61,81 @@ var GitHubClient = class {
         "GET",
         `/repos/${repositoryPath(repository)}/issues/${issueNumber}/comments?per_page=100&page=${page}`
       );
-      comments.push(...batch);
+      comments.push(...batch.map(normalizeComment));
       if (batch.length < 100) return comments;
     }
   }
-  async ensureLabel(repository, name, color) {
+  async ensureLabel(repository, name, color, description) {
     const path2 = `/repos/${repositoryPath(repository)}/labels/${encodeURIComponent(name)}`;
     const response = await this.#rawRequest("GET", path2);
-    if (response.ok) {
-      return;
-    }
+    if (response.ok) return;
     if (response.status !== 404) {
       throw await responseError("GET", path2, response);
     }
     await this.#request("POST", `/repos/${repositoryPath(repository)}/labels`, {
       name,
-      color,
-      description: "Managed by engineering-agent-workflows issue triage"
+      color: normalizeColor(color),
+      description: description?.trim() || "Managed by engineering-agent-workflows"
     });
   }
-  async updateIssue(repository, issueNumber, update) {
-    return this.#request(
-      "PATCH",
-      `/repos/${repositoryPath(repository)}/issues/${issueNumber}`,
-      update
+  async getRepositoryDefaultBranch(repository) {
+    const value = await this.#request(
+      "GET",
+      `/repos/${repositoryPath(repository)}`
     );
+    const branch = value.default_branch?.trim();
+    if (!branch) throw new Error("GitHub repository has no default branch");
+    return branch;
+  }
+  async getPullRequest(repository, pullRequestNumber) {
+    const value = await this.#request(
+      "GET",
+      `/repos/${repositoryPath(repository)}/pulls/${pullRequestNumber}`
+    );
+    return normalizePullRequest(value);
+  }
+  async listOpenPullRequests(repository) {
+    const values = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.#request(
+        "GET",
+        `/repos/${repositoryPath(repository)}/pulls?state=open&per_page=100&page=${page}`
+      );
+      values.push(...batch.map(normalizePullRequest));
+      if (batch.length < 100) return values;
+    }
+  }
+  async listReviewComments(repository, pullRequestNumber) {
+    const comments = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.#request(
+        "GET",
+        `/repos/${repositoryPath(repository)}/pulls/${pullRequestNumber}/comments?per_page=100&page=${page}`
+      );
+      comments.push(...batch.map(normalizeReviewComment));
+      if (batch.length < 100) return comments;
+    }
+  }
+  async listOpenPullRequestsByHead(repository, branch) {
+    const owner = repository.split("/")[0];
+    const query = new URLSearchParams({
+      state: "open",
+      head: `${owner}:${branch}`,
+      per_page: "100"
+    });
+    const values = await this.#request(
+      "GET",
+      `/repos/${repositoryPath(repository)}/pulls?${query.toString()}`
+    );
+    return values.map(normalizePullRequest);
+  }
+  async createDraftPullRequest(repository, input) {
+    const value = await this.#request(
+      "POST",
+      `/repos/${repositoryPath(repository)}/pulls`,
+      { ...input, draft: true }
+    );
+    return normalizePullRequest(value);
   }
   async addLabels(repository, issueNumber, labels) {
     if (labels.length === 0) return;
@@ -103,24 +153,24 @@ var GitHubClient = class {
     }
   }
   async createComment(repository, issueNumber, body) {
-    return this.#request(
+    const comment = await this.#request(
       "POST",
       `/repos/${repositoryPath(repository)}/issues/${issueNumber}/comments`,
       { body }
     );
+    return normalizeComment(comment);
   }
-  async updateComment(repository, commentID, body) {
-    return this.#request(
+  async updateComment(repository, _issueNumber, commentID, body) {
+    const comment = await this.#request(
       "PATCH",
       `/repos/${repositoryPath(repository)}/issues/comments/${commentID}`,
       { body }
     );
+    return normalizeComment(comment);
   }
   async #request(method, path2, body) {
     const response = await this.#rawRequest(method, path2, body);
-    if (!response.ok) {
-      throw await responseError(method, path2, response);
-    }
+    if (!response.ok) throw await responseError(method, path2, response);
     return await response.json();
   }
   #rawRequest(method, path2, body) {
@@ -129,12 +179,8 @@ var GitHubClient = class {
       "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": "engineering-agent-workflows/issue-triage"
     };
-    if (this.#token) {
-      headers.Authorization = `Bearer ${this.#token}`;
-    }
-    if (body !== void 0) {
-      headers["Content-Type"] = "application/json";
-    }
+    if (this.#token) headers.Authorization = `Bearer ${this.#token}`;
+    if (body !== void 0) headers["Content-Type"] = "application/json";
     return this.#fetch(`${this.#baseUrl}${path2}`, {
       method,
       headers,
@@ -144,13 +190,81 @@ var GitHubClient = class {
 };
 function repositoryPath(repository) {
   const parts = repository.split("/");
-  if (parts.length !== 2 || parts.some((part) => part.trim() === "")) {
+  if (parts.length !== 2 || parts.some((part) => !part.trim())) {
     throw new Error(`invalid GitHub repository: ${repository}`);
   }
   return parts.map(encodeURIComponent).join("/");
 }
+function normalizeIssue(issue2) {
+  return {
+    number: issue2.number,
+    title: issue2.title,
+    body: issue2.body,
+    state: issue2.state,
+    htmlUrl: issue2.html_url,
+    updatedAt: issue2.updated_at,
+    labels: labelNames(issue2.labels),
+    ...issue2.user ? { user: normalizeUser(issue2.user) } : {}
+  };
+}
+function normalizeComment(comment) {
+  return {
+    id: comment.id,
+    body: comment.body,
+    ...comment.html_url ? { htmlUrl: comment.html_url } : {},
+    ...comment.created_at ? { createdAt: comment.created_at } : {},
+    ...comment.user ? { user: normalizeUser(comment.user) } : {}
+  };
+}
+function normalizePullRequest(value) {
+  return {
+    number: value.number,
+    url: value.html_url,
+    state: value.state,
+    draft: value.draft ?? false,
+    head: value.head.ref,
+    ...value.head.sha ? { headSha: value.head.sha } : {},
+    ...value.head.repo?.full_name ? { headRepository: value.head.repo.full_name } : {},
+    base: value.base.ref
+  };
+}
+function normalizeReviewComment(comment) {
+  return {
+    id: comment.id,
+    body: comment.body,
+    path: comment.path,
+    ...comment.user ? { user: normalizeUser(comment.user) } : {},
+    ...comment.html_url ? { htmlUrl: comment.html_url } : {},
+    ...comment.created_at ? { createdAt: comment.created_at } : {},
+    ...comment.line != null ? { line: comment.line } : {},
+    ...comment.original_line != null ? { originalLine: comment.original_line } : {},
+    ...comment.start_line != null ? { startLine: comment.start_line } : {},
+    ...comment.original_start_line != null ? { originalStartLine: comment.original_start_line } : {},
+    ...comment.side ? { side: comment.side } : {},
+    ...comment.start_side ? { startSide: comment.start_side } : {},
+    ...comment.diff_hunk ? { diffHunk: comment.diff_hunk } : {},
+    ...comment.commit_id ? { commitId: comment.commit_id } : {},
+    ...comment.original_commit_id ? { originalCommitId: comment.original_commit_id } : {},
+    ...comment.in_reply_to_id !== void 0 ? { inReplyToId: comment.in_reply_to_id } : {},
+    ...comment.pull_request_review_id !== void 0 ? { pullRequestReviewId: comment.pull_request_review_id } : {}
+  };
+}
+function normalizeUser(user) {
+  return {
+    login: user.login,
+    ...user.id !== void 0 ? { id: user.id } : {},
+    ...user.type ? { type: user.type } : {}
+  };
+}
+function labelNames(labels) {
+  return labels.map((label) => typeof label === "string" ? label : label.name).filter((label) => label.trim() !== "");
+}
+function normalizeColor(color) {
+  const normalized = color.trim().replace(/^#/, "");
+  return /^[0-9a-f]{6}$/i.test(normalized) ? normalized : "ededed";
+}
 function searchText(title) {
-  return title.replace(/^\[[^\]]+\]\s*:?[\s]*/, "").replace(/["'`:+(){}[\]\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+  return title.replace(/^\[[^\]]+\]\s*:?\s*/, "").replace(/["'`:+(){}[\]\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
 }
 function truncate(value, max) {
   return value.length <= max ? value : value.slice(0, max);
@@ -159,6 +273,187 @@ async function responseError(method, path2, response) {
   const text = await response.text().catch(() => "");
   return new Error(
     `GitHub API ${method} ${path2} failed with HTTP ${response.status}: ${truncate(text, 1e3)}`
+  );
+}
+
+// src/issues/types.ts
+function isProjectPath(value) {
+  return /^[^/\s]+(?:\/[^/\s]+)+$/.test(value);
+}
+
+// src/gitlab/client.ts
+var GitLabClient = class {
+  #token;
+  #baseUrl;
+  #fetch;
+  constructor(options = {}) {
+    this.#token = options.token?.trim() ?? "";
+    this.#baseUrl = (options.baseUrl ?? "https://gitlab.com/api/v4").replace(
+      /\/+$/,
+      ""
+    );
+    this.#fetch = options.fetch ?? fetch;
+  }
+  async getIssue(project, issueNumber) {
+    const issue2 = await this.#request(
+      "GET",
+      `${projectIssuesPath(project)}/${issueNumber}`
+    );
+    return normalizeIssue2(issue2);
+  }
+  async searchCandidates(project, issue2, limit) {
+    const title = searchText2(issue2.title);
+    if (!title) return [];
+    const query = new URLSearchParams({
+      search: title,
+      in: "title",
+      scope: "all",
+      per_page: String(Math.min(Math.max(limit + 1, 1), 100)),
+      page: "1"
+    });
+    const candidates = await this.#request(
+      "GET",
+      `${projectIssuesPath(project)}?${query.toString()}`
+    );
+    return candidates.filter((candidate) => candidate.iid !== issue2.number).slice(0, limit).map((candidate) => ({
+      number: candidate.iid,
+      title: candidate.title,
+      body: truncate2(candidate.description ?? "", 4e3),
+      state: candidate.state,
+      labels: candidate.labels,
+      url: candidate.web_url
+    }));
+  }
+  async listComments(project, issueNumber) {
+    const comments = [];
+    for (let page = 1; ; page += 1) {
+      const response = await this.#rawRequest(
+        "GET",
+        `${projectIssuesPath(project)}/${issueNumber}/notes?per_page=100&page=${page}&sort=asc&order_by=created_at`
+      );
+      if (!response.ok) {
+        throw await responseError2("GET", response.url, response);
+      }
+      const batch = await response.json();
+      comments.push(
+        ...batch.filter((note) => !note.system).map(normalizeComment2)
+      );
+      if (!response.headers.get("X-Next-Page") && batch.length < 100) {
+        return comments;
+      }
+    }
+  }
+  async ensureLabel(project, name, color, description) {
+    const path2 = `/projects/${projectID(project)}/labels/${encodeURIComponent(name)}`;
+    const response = await this.#rawRequest("GET", path2);
+    if (response.ok) return;
+    if (response.status !== 404) {
+      throw await responseError2("GET", path2, response);
+    }
+    await this.#request("POST", `/projects/${projectID(project)}/labels`, {
+      name,
+      color: normalizeColor2(color),
+      description: description?.trim() || "Managed by engineering-agent-workflows"
+    });
+  }
+  async addLabels(project, issueNumber, labels) {
+    if (labels.length === 0) return;
+    await this.#request("PUT", `${projectIssuesPath(project)}/${issueNumber}`, {
+      add_labels: labels.join(",")
+    });
+  }
+  async removeLabel(project, issueNumber, label) {
+    await this.#request("PUT", `${projectIssuesPath(project)}/${issueNumber}`, {
+      remove_labels: label
+    });
+  }
+  async createComment(project, issueNumber, body) {
+    const note = await this.#request(
+      "POST",
+      `${projectIssuesPath(project)}/${issueNumber}/notes`,
+      { body }
+    );
+    return normalizeComment2(note);
+  }
+  async updateComment(project, issueNumber, commentID, body) {
+    const note = await this.#request(
+      "PUT",
+      `${projectIssuesPath(project)}/${issueNumber}/notes/${commentID}`,
+      { body }
+    );
+    return normalizeComment2(note);
+  }
+  async #request(method, path2, body) {
+    const response = await this.#rawRequest(method, path2, body);
+    if (!response.ok) throw await responseError2(method, path2, response);
+    return await response.json();
+  }
+  #rawRequest(method, path2, body) {
+    const headers = {
+      Accept: "application/json",
+      "User-Agent": "engineering-agent-workflows/issue-triage"
+    };
+    if (this.#token) headers["PRIVATE-TOKEN"] = this.#token;
+    if (body !== void 0) headers["Content-Type"] = "application/json";
+    return this.#fetch(`${this.#baseUrl}${path2}`, {
+      method,
+      headers,
+      ...body === void 0 ? {} : { body: JSON.stringify(body) }
+    });
+  }
+};
+function projectIssuesPath(project) {
+  return `/projects/${projectID(project)}/issues`;
+}
+function projectID(project) {
+  if (!isProjectPath(project)) {
+    throw new Error(`invalid GitLab project path: ${project}`);
+  }
+  return encodeURIComponent(project);
+}
+function normalizeIssue2(issue2) {
+  return {
+    number: issue2.iid,
+    title: issue2.title,
+    body: issue2.description,
+    state: issue2.state,
+    htmlUrl: issue2.web_url,
+    updatedAt: issue2.updated_at,
+    labels: issue2.labels,
+    ...issue2.author ? {
+      user: {
+        login: issue2.author.username,
+        type: issue2.author.bot ? "Bot" : "User"
+      }
+    } : {}
+  };
+}
+function normalizeComment2(note) {
+  return {
+    id: note.id,
+    body: note.body,
+    ...note.author ? {
+      user: {
+        login: note.author.username,
+        type: note.author.bot ? "Bot" : "User"
+      }
+    } : {}
+  };
+}
+function normalizeColor2(color) {
+  const normalized = color.trim().replace(/^#/, "");
+  return `#${/^[0-9a-f]{6}$/i.test(normalized) ? normalized : "ededed"}`;
+}
+function searchText2(title) {
+  return title.replace(/^\[[^\]]+\]\s*:?\s*/, "").replace(/["'`:+(){}[\]\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+}
+function truncate2(value, max) {
+  return value.length <= max ? value : value.slice(0, max);
+}
+async function responseError2(method, path2, response) {
+  const text = await response.text().catch(() => "");
+  return new Error(
+    `GitLab API ${method} ${path2} failed with HTTP ${response.status}: ${truncate2(text, 1e3)}`
   );
 }
 
@@ -3270,7 +3565,7 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
             })));
           }
         }
-        
+
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -3278,7 +3573,7 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
         } else {
           newResult[${k}] = ${id}.value;
         }
-        
+
       `);
       } else if (!isOptionalIn) {
         doc.write(`
@@ -3315,7 +3610,7 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
             path: iss.path ? [${k}, ...iss.path] : [${k}]
           })));
         }
-        
+
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -3323,7 +3618,7 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
         } else {
           newResult[${k}] = ${id}.value;
         }
-        
+
       `);
       }
     }
@@ -14680,13 +14975,20 @@ config(en_default());
 var triagePolicySchema = external_exports.object({
   version: external_exports.number().int().positive(),
   duplicateConfidenceThreshold: external_exports.number().min(0).max(1),
-  titleConfidenceThreshold: external_exports.number().min(0).max(1),
   classificationConfidenceThreshold: external_exports.number().min(0).max(1),
   priorityConfidenceThreshold: external_exports.number().min(0).max(1),
   maxCandidates: external_exports.number().int().min(0).max(100),
   maxRelatedIssues: external_exports.number().int().min(0).max(20),
+  skipLabels: external_exports.array(external_exports.string().min(1)),
   managedLabelPrefixes: external_exports.array(external_exports.string().min(1)),
-  labelColors: external_exports.record(external_exports.string(), external_exports.string().regex(/^[0-9a-fA-F]{6}$/))
+  classificationLabels: external_exports.object({
+    bug: external_exports.string().min(1),
+    enhancement: external_exports.string().min(1),
+    documentation: external_exports.string().min(1),
+    question: external_exports.string().min(1)
+  }),
+  labelColors: external_exports.record(external_exports.string(), external_exports.string().regex(/^[0-9a-fA-F]{6}$/)),
+  labelDescriptions: external_exports.record(external_exports.string(), external_exports.string().min(1).max(100))
 });
 function calculatePriority(analysis, policy) {
   const { facts } = analysis;
@@ -14708,7 +15010,7 @@ function calculatePriority(analysis, policy) {
   }
   return "P3";
 }
-function makeDecision(analysis, candidates, policy) {
+function makeDecision(analysis, candidates, policy, existingLabels = []) {
   const candidateNumbers = new Set(
     candidates.map((candidate) => candidate.number)
   );
@@ -14722,25 +15024,52 @@ function makeDecision(analysis, candidates, policy) {
     ) === index
   ).slice(0, policy.maxRelatedIssues);
   const priority = calculatePriority(analysis, policy);
+  const classification = resolveClassification(
+    analysis,
+    existingLabels,
+    policy
+  );
   const labels = [
     `priority:${priority}`,
     analysis.missingInformation.length > 0 ? "triage:needs-info" : "triage:done"
   ];
-  if (analysis.classificationConfidence >= policy.classificationConfidenceThreshold) {
-    labels.push(`area:${analysis.area}`, analysis.issueType);
+  if (classification.source === "analysis" && classification.label) {
+    labels.push(classification.label);
   }
   if (duplicateIssueNumber !== null) {
     labels.push("duplicate");
   }
   return {
     analysis,
-    normalizedTitle: sanitizeTitle(
-      analysis.titleConfidence >= policy.titleConfidenceThreshold ? analysis.normalizedTitle : ""
-    ),
+    classification,
     priority,
     labels: [...new Set(labels)],
     duplicateIssueNumber,
     relatedIssues
+  };
+}
+function resolveClassification(analysis, existingLabels, policy) {
+  const configuredLabels = Object.values(policy.classificationLabels);
+  const normalizedConfigured = new Map(
+    configuredLabels.map((label) => [label.trim().toLowerCase(), label])
+  );
+  const existingClassificationLabels = [
+    ...new Set(
+      existingLabels.map((label) => normalizedConfigured.get(label.trim().toLowerCase())).filter((label) => Boolean(label))
+    )
+  ];
+  if (existingClassificationLabels.length === 1) {
+    return { label: existingClassificationLabels[0], source: "existing" };
+  }
+  if (existingClassificationLabels.length > 1) {
+    return { label: null, source: "conflict" };
+  }
+  if (analysis.issueType === "unknown" || analysis.classificationConfidence < policy.classificationConfidenceThreshold) {
+    return { label: null, source: "unknown" };
+  }
+  return {
+    label: policy.classificationLabels[analysis.issueType],
+    source: "analysis"
   };
 }
 function mergeManagedLabels(existing, desired, managedPrefixes) {
@@ -14748,9 +15077,6 @@ function mergeManagedLabels(existing, desired, managedPrefixes) {
     (label) => !managedPrefixes.some((prefix) => label.startsWith(prefix))
   );
   return [.../* @__PURE__ */ new Set([...preserved, ...desired])];
-}
-function sanitizeTitle(title) {
-  return title.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 180);
 }
 
 // src/issue-triage/target.ts
@@ -14769,7 +15095,7 @@ function assertBoundIssueTarget(repository, issueNumber, apply, environment) {
     throw new Error("incomplete scheduler-bound Issue target");
   }
   const expectedIssueNumber = Number(expectedIssueText);
-  if (!/^[^/\s]+\/[^/\s]+$/.test(expectedRepository) || !Number.isSafeInteger(expectedIssueNumber) || expectedIssueNumber <= 0) {
+  if (!isProjectPath(expectedRepository) || !Number.isSafeInteger(expectedIssueNumber) || expectedIssueNumber <= 0) {
     throw new Error("invalid scheduler-bound Issue target");
   }
   if (repository !== expectedRepository || issueNumber !== expectedIssueNumber) {
@@ -14777,11 +15103,6 @@ function assertBoundIssueTarget(repository, issueNumber, apply, environment) {
       `requested Issue ${repository}#${issueNumber} does not match scheduler-bound target ${expectedRepository}#${expectedIssueNumber}`
     );
   }
-}
-
-// src/github/types.ts
-function labelNames(issue2) {
-  return issue2.labels.map((label) => typeof label === "string" ? label : label.name).filter((label) => label.trim() !== "");
 }
 
 // src/issue-triage/comment.ts
@@ -14809,12 +15130,9 @@ function buildTriageComment(issueNumber, fingerprint, decision) {
     commentMarker(issueNumber, fingerprint),
     "## Issue triage",
     "",
-    analysis.summary,
-    "",
     "### Classification",
     "",
-    `- Type: \`${analysis.issueType}\``,
-    `- Area: \`${analysis.area}\``,
+    `- Type: \`${classificationText(decision)}\``,
     `- Priority: \`${decision.priority}\``,
     `- Priority basis: ${analysis.priorityReason}`
   ];
@@ -14823,19 +15141,13 @@ function buildTriageComment(issueNumber, fingerprint, decision) {
       "",
       "### Possible duplicate",
       "",
-      `- #${decision.duplicateIssueNumber} (${Math.round(analysis.duplicate.confidence * 100)}% confidence): ${analysis.duplicate.reason}`
+      `- #${decision.duplicateIssueNumber}: ${analysis.duplicate.reason}`
     );
   }
   if (decision.relatedIssues.length > 0) {
     lines.push("", "### Related issues", "");
     for (const related of decision.relatedIssues) {
       lines.push(`- #${related.issueNumber}: ${related.reason}`);
-    }
-  }
-  if (analysis.acceptanceCriteria.length > 0) {
-    lines.push("", "### Suggested acceptance criteria", "");
-    for (const criterion of analysis.acceptanceCriteria) {
-      lines.push(`- [ ] ${criterion}`);
     }
   }
   if (analysis.missingInformation.length > 0) {
@@ -14850,16 +15162,22 @@ function buildTriageComment(issueNumber, fingerprint, decision) {
   );
   return lines.join("\n");
 }
+function classificationText(decision) {
+  if (decision.classification.label) return decision.classification.label;
+  return decision.classification.source === "conflict" ? "unresolved (conflicting existing labels)" : "unknown";
+}
 
 // src/issue-triage/schema.ts
 var unknownBoolean = external_exports.boolean().nullable();
 var triageAnalysisSchema = external_exports.object({
-  normalizedTitle: external_exports.string().min(1).max(180),
-  summary: external_exports.string().min(1).max(4e3),
-  issueType: external_exports.enum(["bug", "enhancement", "question", "task"]),
-  area: external_exports.enum(["api", "cli", "runtime", "reliability", "docs", "general"]),
+  issueType: external_exports.enum([
+    "bug",
+    "enhancement",
+    "documentation",
+    "question",
+    "unknown"
+  ]),
   classificationConfidence: external_exports.number().min(0).max(1),
-  titleConfidence: external_exports.number().min(0).max(1),
   priorityConfidence: external_exports.number().min(0).max(1),
   facts: external_exports.object({
     environment: external_exports.enum(["production", "non-production", "unknown"]),
@@ -14883,7 +15201,6 @@ var triageAnalysisSchema = external_exports.object({
       reason: external_exports.string().min(1).max(1e3)
     })
   ).max(10),
-  acceptanceCriteria: external_exports.array(external_exports.string().min(1).max(1e3)).max(10),
   missingInformation: external_exports.array(external_exports.string().min(1).max(1e3)).max(10),
   priorityReason: external_exports.string().min(1).max(2e3)
 });
@@ -14894,10 +15211,21 @@ var triageSubmissionSchema = external_exports.object({
 
 // src/issue-triage/tool.ts
 async function prepareIssueTriage(repository, issueNumber, dependencies) {
-  const [issue2, comments] = await Promise.all([
-    dependencies.github.getIssue(repository, issueNumber),
-    dependencies.github.listComments(repository, issueNumber)
-  ]);
+  const issue2 = await dependencies.issues.getIssue(repository, issueNumber);
+  if (hasSkipLabel(issue2.labels, dependencies.policy.skipLabels)) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: "issue has a configured skip-triage label",
+      repository,
+      issueNumber,
+      issueFingerprint: issueFingerprint(issue2)
+    };
+  }
+  const comments = await dependencies.issues.listComments(
+    repository,
+    issueNumber
+  );
   const contextComments = selectContextComments(
     comments,
     dependencies.botLogin
@@ -14919,7 +15247,7 @@ async function prepareIssueTriage(repository, issueNumber, dependencies) {
     };
   }
   const { candidates, warnings } = await loadCandidates(
-    dependencies.github,
+    dependencies.issues,
     repository,
     issue2,
     dependencies.policy.maxCandidates
@@ -14937,11 +15265,22 @@ async function prepareIssueTriage(repository, issueNumber, dependencies) {
 }
 async function applyIssueTriage(repository, issueNumber, submissionInput, apply, dependencies) {
   const submission = triageSubmissionSchema.parse(submissionInput);
+  const issue2 = await dependencies.issues.getIssue(repository, issueNumber);
+  if (hasSkipLabel(issue2.labels, dependencies.policy.skipLabels)) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: "issue has a configured skip-triage label",
+      repository,
+      issueNumber,
+      applied: false
+    };
+  }
   const botLogin = requiredBotLogin(apply, dependencies.botLogin);
-  const [issue2, comments] = await Promise.all([
-    dependencies.github.getIssue(repository, issueNumber),
-    dependencies.github.listComments(repository, issueNumber)
-  ]);
+  const comments = await dependencies.issues.listComments(
+    repository,
+    issueNumber
+  );
   const contextComments = selectContextComments(comments, botLogin);
   const currentFingerprint = issueFingerprint(issue2, contextComments);
   if (currentFingerprint !== submission.issueFingerprint) {
@@ -14960,7 +15299,7 @@ async function applyIssueTriage(repository, issueNumber, submissionInput, apply,
     };
   }
   const { candidates, warnings } = await loadCandidates(
-    dependencies.github,
+    dependencies.issues,
     repository,
     issue2,
     dependencies.policy.maxCandidates
@@ -14968,30 +15307,26 @@ async function applyIssueTriage(repository, issueNumber, submissionInput, apply,
   const decision = makeDecision(
     submission.analysis,
     candidates,
-    dependencies.policy
+    dependencies.policy,
+    issue2.labels
   );
-  const targetTitle = decision.normalizedTitle || issue2.title;
-  const targetIssue = { ...issue2, title: targetTitle };
-  const targetFingerprint = issueFingerprint(targetIssue, contextComments);
   const proposedComment = buildTriageComment(
     issueNumber,
-    targetFingerprint,
+    currentFingerprint,
     decision
   );
   const desiredLabels = mergeManagedLabels(
-    labelNames(issue2),
+    issue2.labels,
     decision.labels,
     dependencies.policy.managedLabelPrefixes
   );
-  const existingLabels = labelNames(issue2);
+  const existingLabels = issue2.labels;
   const labelsToAdd = desiredLabels.filter(
     (label) => !existingLabels.includes(label)
   );
   const labelsToRemove = existingLabels.filter(
     (label) => isManagedLabel(label, dependencies.policy.managedLabelPrefixes) && !desiredLabels.includes(label)
   );
-  const titleChanged = targetTitle !== issue2.title;
-  const labelsChanged = labelsToAdd.length > 0 || labelsToRemove.length > 0;
   const existingComment = findTriageComment(comments, botLogin);
   if (!apply) {
     return {
@@ -14999,7 +15334,6 @@ async function applyIssueTriage(repository, issueNumber, submissionInput, apply,
       repository,
       issueNumber,
       applied: false,
-      titleChanged,
       commentAction: "dry-run",
       decision,
       proposedComment,
@@ -15007,31 +15341,27 @@ async function applyIssueTriage(repository, issueNumber, submissionInput, apply,
     };
   }
   await ensureLabels(
-    dependencies.github,
+    dependencies.issues,
     repository,
     decision.labels,
     dependencies.policy
   );
-  if (titleChanged) {
-    await dependencies.github.updateIssue(repository, issueNumber, {
-      title: targetTitle
-    });
-  }
-  await dependencies.github.addLabels(repository, issueNumber, labelsToAdd);
+  await dependencies.issues.addLabels(repository, issueNumber, labelsToAdd);
   for (const label of labelsToRemove) {
-    await dependencies.github.removeLabel(repository, issueNumber, label);
+    await dependencies.issues.removeLabel(repository, issueNumber, label);
   }
   let commentAction = "unchanged";
   if (!existingComment) {
-    await dependencies.github.createComment(
+    await dependencies.issues.createComment(
       repository,
       issueNumber,
       proposedComment
     );
     commentAction = "created";
   } else if (existingComment.body !== proposedComment) {
-    await dependencies.github.updateComment(
+    await dependencies.issues.updateComment(
       repository,
+      issueNumber,
       existingComment.id,
       proposedComment
     );
@@ -15042,16 +15372,15 @@ async function applyIssueTriage(repository, issueNumber, submissionInput, apply,
     repository,
     issueNumber,
     applied: true,
-    titleChanged,
     commentAction,
     decision,
     ...warnings.length > 0 ? { warnings } : {}
   };
 }
-async function loadCandidates(github, repository, issue2, limit) {
+async function loadCandidates(issues, repository, issue2, limit) {
   try {
     return {
-      candidates: await github.searchCandidates(repository, issue2, limit),
+      candidates: await issues.searchCandidates(repository, issue2, limit),
       warnings: []
     };
   } catch (error51) {
@@ -15086,32 +15415,41 @@ function selectContextComments(comments, botLogin) {
     (comment) => !isManagedTriageComment(comment, botLogin) || !comment.body.startsWith(COMMENT_MARKER_PREFIX)
   ).sort((left, right) => left.id - right.id).slice(-50).map((comment) => ({
     ...comment,
-    body: truncate2(comment.body, 4e3)
+    body: truncate3(comment.body, 4e3)
   }));
 }
 function requiredBotLogin(apply, botLogin) {
   const normalized = botLogin?.trim();
   if (apply && !normalized) {
-    throw new Error("ISSUE_TRIAGE_BOT_LOGIN is required in apply mode");
+    throw new Error("provider bot username is required in apply mode");
   }
   return normalized || void 0;
 }
 function isManagedLabel(label, managedPrefixes) {
   return managedPrefixes.some((prefix) => label.startsWith(prefix));
 }
-async function ensureLabels(github, repository, labels, policy) {
+function hasSkipLabel(labels, skipLabels) {
+  const normalizedSkipLabels = new Set(
+    skipLabels.map((label) => label.trim().toLowerCase())
+  );
+  return labels.some(
+    (label) => normalizedSkipLabels.has(label.trim().toLowerCase())
+  );
+}
+async function ensureLabels(issues, repository, labels, policy) {
   for (const label of labels) {
-    await github.ensureLabel(
+    await issues.ensureLabel(
       repository,
       label,
-      policy.labelColors[label] ?? "ededed"
+      policy.labelColors[label] ?? "ededed",
+      policy.labelDescriptions[label]
     );
   }
 }
 function errorMessage(error51) {
   return error51 instanceof Error ? error51.message : String(error51);
 }
-function truncate2(value, max) {
+function truncate3(value, max) {
   return value.length <= max ? value : value.slice(0, max);
 }
 
@@ -15126,14 +15464,21 @@ async function main() {
     apply,
     process.env
   );
-  const github = new GitHubClient({
+  const provider = process.env.ISSUE_TRIAGE_PROVIDER?.trim().toLowerCase() ?? "gitlab";
+  if (provider !== "gitlab" && provider !== "github") {
+    throw new Error(`unsupported ISSUE_TRIAGE_PROVIDER: ${provider}`);
+  }
+  const issues = provider === "github" ? new GitHubClient({
     ...process.env.GITHUB_TOKEN ? { token: process.env.GITHUB_TOKEN } : {},
     ...process.env.GITHUB_API_URL ? { baseUrl: process.env.GITHUB_API_URL } : {}
+  }) : new GitLabClient({
+    ...process.env.GITLAB_TOKEN ? { token: process.env.GITLAB_TOKEN } : {},
+    ...process.env.GITLAB_API_URL ? { baseUrl: process.env.GITLAB_API_URL } : {}
   });
   const dependencies = {
-    github,
+    issues,
     policy,
-    ...process.env.ISSUE_TRIAGE_BOT_LOGIN ? { botLogin: process.env.ISSUE_TRIAGE_BOT_LOGIN } : {}
+    ...provider === "github" ? process.env.GITHUB_BOT_LOGIN ? { botLogin: process.env.GITHUB_BOT_LOGIN } : {} : process.env.GITLAB_BOT_USERNAME ? { botLogin: process.env.GITLAB_BOT_USERNAME } : {}
   };
   const result = options.command === "prepare" ? await prepareIssueTriage(
     options.repository,
@@ -15192,8 +15537,8 @@ function parseArguments(args) {
       throw new Error(`unknown argument: ${argument}`);
     }
   }
-  if (!/^[^/\s]+\/[^/\s]+$/.test(repository)) {
-    throw new Error("--repository must use owner/name format");
+  if (!isProjectPath(repository)) {
+    throw new Error("--repository must use a GitLab namespace/project path");
   }
   if (issueNumber <= 0) throw new Error("--issue is required");
   if (command === "apply" && !analysisFile) {

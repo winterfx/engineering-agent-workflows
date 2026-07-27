@@ -28,7 +28,7 @@ export function assertBoundIssueTarget(
 
   const expectedIssueNumber = Number(expectedIssueText);
   if (
-    !/^[^/\s]+\/[^/\s]+$/.test(expectedRepository) ||
+    !isProjectPath(expectedRepository) ||
     !Number.isSafeInteger(expectedIssueNumber) ||
     expectedIssueNumber <= 0
   ) {
@@ -43,3 +43,4 @@ export function assertBoundIssueTarget(
     );
   }
 }
+import { isProjectPath } from "../issues/types.js";
