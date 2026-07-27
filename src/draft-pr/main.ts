@@ -3,6 +3,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { GitHubClient } from "../github/client.js";
 import { isProjectPath } from "../issues/types.js";
+import {
+  envBoolean,
+  isPositiveInteger,
+  requiredArgumentValue,
+} from "../runtime/cli.js";
+import { errorMessage } from "../runtime/errors.js";
+import { loadJsonFromCandidates } from "../runtime/load-json.js";
 import { draftPrPolicySchema, type DraftPrPolicy } from "./policy.js";
 import {
   applyReviewFix,
@@ -85,7 +92,7 @@ async function main(): Promise<void> {
       ? { botLogin: process.env.GITHUB_BOT_LOGIN }
       : {}),
     monkeyScanBotLogin: process.env.MONKEYSCAN_BOT_LOGIN?.trim() ?? "",
-    ...(positiveInteger(process.env.MONKEYSCAN_BOT_USER_ID)
+    ...(isPositiveInteger(process.env.MONKEYSCAN_BOT_USER_ID)
       ? { monkeyScanBotUserId: Number(process.env.MONKEYSCAN_BOT_USER_ID) }
       : {}),
   };
@@ -144,21 +151,14 @@ async function main(): Promise<void> {
 }
 
 async function loadPolicy(): Promise<DraftPrPolicy> {
-  const candidates = [
-    fileURLToPath(new URL("../policy.json", import.meta.url)),
-    path.resolve("agents/draft-pr/policy.json"),
-  ];
-  let lastError: unknown;
-  for (const candidate of candidates) {
-    try {
-      return draftPrPolicySchema.parse(
-        JSON.parse(await readFile(candidate, "utf8")) as unknown,
-      );
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw new Error(`failed to load Draft PR policy: ${errorMessage(lastError)}`);
+  return loadJsonFromCandidates(
+    [
+      fileURLToPath(new URL("../policy.json", import.meta.url)),
+      path.resolve("agents/draft-pr/policy.json"),
+    ],
+    (value) => draftPrPolicySchema.parse(value),
+    "failed to load Draft PR policy",
+  );
 }
 
 function parseArguments(args: string[]): CLIOptions {
@@ -248,29 +248,6 @@ function parseArguments(args: string[]): CLIOptions {
     ...(iterations ? { iterations } : {}),
     ...(headSha ? { headSha } : {}),
   };
-}
-
-function positiveInteger(value: string | undefined): boolean {
-  const number = Number(value?.trim());
-  return Number.isSafeInteger(number) && number > 0;
-}
-
-function requiredArgumentValue(
-  args: string[],
-  index: number,
-  name: string,
-): string {
-  const value = args[index]?.trim();
-  if (!value) throw new Error(`${name} requires a value`);
-  return value;
-}
-
-function envBoolean(value: string | undefined): boolean {
-  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 main().catch((error: unknown) => {

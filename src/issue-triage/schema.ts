@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ISSUE_FINGERPRINT_PATTERN } from "../issues/fingerprint.js";
 
 const unknownBoolean = z.boolean().nullable();
 
@@ -41,7 +42,7 @@ export const triageAnalysisSchema = z.object({
 });
 
 export const triageSubmissionSchema = z.object({
-  issueFingerprint: z.string().regex(/^[0-9a-f]{20}$/),
+  issueFingerprint: z.string().regex(ISSUE_FINGERPRINT_PATTERN),
   analysis: triageAnalysisSchema,
 });
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ISSUE_FINGERPRINT_PATTERN } from "../issues/fingerprint.js";
 
 export const draftPrAnalysisSchema = z.object({
   outcome: z.enum(["implemented", "needs_approval", "blocked", "no_change"]),
@@ -21,7 +22,7 @@ export const draftPrAnalysisSchema = z.object({
 });
 
 export const draftPrSubmissionSchema = z.object({
-  issueFingerprint: z.string().regex(/^[0-9a-f]{20}$/),
+  issueFingerprint: z.string().regex(ISSUE_FINGERPRINT_PATTERN),
   trigger: z.enum(["ready", "approved"]),
   workspacePath: z.string().min(1).max(2000),
   branch: z.string().min(1).max(250),

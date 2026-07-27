@@ -1,30 +1,9 @@
-import crypto from "node:crypto";
-import type { Issue, IssueComment } from "../issues/types.js";
+import { issueFingerprint } from "../issues/fingerprint.js";
+import { ISSUE_TRIAGE_COMMENT_PREFIX } from "../issues/managed-comments.js";
 import type { TriageDecision } from "./schema.js";
 
-export const COMMENT_MARKER_PREFIX =
-  "<!-- engineering-agent-workflows:issue-triage:v1";
-
-export function issueFingerprint(
-  issue: Pick<Issue, "title" | "body">,
-  comments: Array<Pick<IssueComment, "id" | "body" | "user">> = [],
-): string {
-  return crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify({
-        title: issue.title.trim(),
-        body: issue.body ?? "",
-        comments: comments.map((comment) => ({
-          id: comment.id,
-          body: comment.body,
-          author: comment.user?.login ?? "",
-        })),
-      }),
-    )
-    .digest("hex")
-    .slice(0, 20);
-}
+export const COMMENT_MARKER_PREFIX = ISSUE_TRIAGE_COMMENT_PREFIX;
+export { issueFingerprint } from "../issues/fingerprint.js";
 
 export function commentMarker(
   issueNumber: number,

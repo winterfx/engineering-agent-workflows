@@ -1,9 +1,11 @@
 import type { IssuesClient } from "../issues/client.js";
 import type { Issue, IssueCandidate, IssueComment } from "../issues/types.js";
+import { issueSearchText } from "../issues/search.js";
 import type {
-  DraftPullRequest,
+  PullRequest,
   PullRequestReviewComment,
-} from "../draft-pr/provider.js";
+} from "../pull-requests/types.js";
+import { truncateText } from "../runtime/text.js";
 import type {
   GitHubCommentAPI,
   GitHubIssueAPI,
@@ -49,7 +51,7 @@ export class GitHubClient implements IssuesClient {
     issue: Issue,
     limit: number,
   ): Promise<IssueCandidate[]> {
-    const title = searchText(issue.title);
+    const title = issueSearchText(issue.title);
     if (!title) return [];
     const query = new URLSearchParams({
       q: `repo:${repository} is:issue in:title ${title}`,
@@ -68,7 +70,7 @@ export class GitHubClient implements IssuesClient {
       .map((candidate) => ({
         number: candidate.number,
         title: candidate.title,
-        body: truncate(candidate.body ?? "", 4000),
+        body: truncateText(candidate.body ?? "", 4000),
         state: candidate.state,
         labels: labelNames(candidate.labels),
         url: candidate.html_url,
@@ -123,7 +125,7 @@ export class GitHubClient implements IssuesClient {
   async getPullRequest(
     repository: string,
     pullRequestNumber: number,
-  ): Promise<DraftPullRequest> {
+  ): Promise<PullRequest> {
     const value = await this.#request<GitHubPullRequestAPI>(
       "GET",
       `/repos/${repositoryPath(repository)}/pulls/${pullRequestNumber}`,
@@ -131,8 +133,8 @@ export class GitHubClient implements IssuesClient {
     return normalizePullRequest(value);
   }
 
-  async listOpenPullRequests(repository: string): Promise<DraftPullRequest[]> {
-    const values: DraftPullRequest[] = [];
+  async listOpenPullRequests(repository: string): Promise<PullRequest[]> {
+    const values: PullRequest[] = [];
     for (let page = 1; ; page += 1) {
       const batch = await this.#request<GitHubPullRequestAPI[]>(
         "GET",
@@ -161,7 +163,7 @@ export class GitHubClient implements IssuesClient {
   async listOpenPullRequestsByHead(
     repository: string,
     branch: string,
-  ): Promise<DraftPullRequest[]> {
+  ): Promise<PullRequest[]> {
     const owner = repository.split("/")[0]!;
     const query = new URLSearchParams({
       state: "open",
@@ -178,7 +180,7 @@ export class GitHubClient implements IssuesClient {
   async createDraftPullRequest(
     repository: string,
     input: { title: string; body: string; head: string; base: string },
-  ): Promise<DraftPullRequest> {
+  ): Promise<PullRequest> {
     const value = await this.#request<GitHubPullRequestAPI>(
       "POST",
       `/repos/${repositoryPath(repository)}/pulls`,
@@ -296,7 +298,7 @@ function normalizeComment(comment: GitHubCommentAPI): IssueComment {
   };
 }
 
-function normalizePullRequest(value: GitHubPullRequestAPI): DraftPullRequest {
+function normalizePullRequest(value: GitHubPullRequestAPI): PullRequest {
   return {
     number: value.number,
     url: value.html_url,
@@ -364,19 +366,6 @@ function normalizeColor(color: string): string {
   return /^[0-9a-f]{6}$/i.test(normalized) ? normalized : "ededed";
 }
 
-function searchText(title: string): string {
-  return title
-    .replace(/^\[[^\]]+\]\s*:?\s*/, "")
-    .replace(/["'`:+(){}[\]\\]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
-}
-
-function truncate(value: string, max: number): string {
-  return value.length <= max ? value : value.slice(0, max);
-}
-
 async function responseError(
   method: string,
   path: string,
@@ -384,6 +373,6 @@ async function responseError(
 ): Promise<Error> {
   const text = await response.text().catch(() => "");
   return new Error(
-    `GitHub API ${method} ${path} failed with HTTP ${response.status}: ${truncate(text, 1000)}`,
+    `GitHub API ${method} ${path} failed with HTTP ${response.status}: ${truncateText(text, 1000)}`,
   );
 }

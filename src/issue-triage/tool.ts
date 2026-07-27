@@ -1,11 +1,10 @@
 import type { IssuesClient } from "../issues/client.js";
+import { issueFingerprint } from "../issues/fingerprint.js";
+import { isIssueTriageComment } from "../issues/managed-comments.js";
 import type { Issue, IssueCandidate, IssueComment } from "../issues/types.js";
-import {
-  buildTriageComment,
-  COMMENT_MARKER_PREFIX,
-  commentMarker,
-  issueFingerprint,
-} from "./comment.js";
+import { errorMessage } from "../runtime/errors.js";
+import { truncateText } from "../runtime/text.js";
+import { buildTriageComment, commentMarker } from "./comment.js";
 import {
   makeDecision,
   mergeManagedLabels,
@@ -278,7 +277,7 @@ function findTriageComment(
   return comments.find(
     (comment) =>
       isManagedTriageComment(comment, botLogin) &&
-      comment.body.startsWith(COMMENT_MARKER_PREFIX),
+      isIssueTriageComment(comment.body),
   );
 }
 
@@ -300,13 +299,13 @@ function selectContextComments(
     .filter(
       (comment) =>
         !isManagedTriageComment(comment, botLogin) ||
-        !comment.body.startsWith(COMMENT_MARKER_PREFIX),
+        !isIssueTriageComment(comment.body),
     )
     .sort((left, right) => left.id - right.id)
     .slice(-50)
     .map((comment) => ({
       ...comment,
-      body: truncate(comment.body, 4000),
+      body: truncateText(comment.body, 4000),
     }));
 }
 
@@ -348,12 +347,4 @@ async function ensureLabels(
       policy.labelDescriptions[label],
     );
   }
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function truncate(value: string, max: number): string {
-  return value.length <= max ? value : value.slice(0, max);
 }
