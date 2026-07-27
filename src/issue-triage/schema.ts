@@ -3,12 +3,14 @@ import { z } from "zod";
 const unknownBoolean = z.boolean().nullable();
 
 export const triageAnalysisSchema = z.object({
-  normalizedTitle: z.string().min(1).max(180),
-  summary: z.string().min(1).max(4000),
-  issueType: z.enum(["bug", "enhancement", "question", "task"]),
-  area: z.enum(["api", "cli", "runtime", "reliability", "docs", "general"]),
+  issueType: z.enum([
+    "bug",
+    "enhancement",
+    "documentation",
+    "question",
+    "unknown",
+  ]),
   classificationConfidence: z.number().min(0).max(1),
-  titleConfidence: z.number().min(0).max(1),
   priorityConfidence: z.number().min(0).max(1),
   facts: z.object({
     environment: z.enum(["production", "non-production", "unknown"]),
@@ -34,7 +36,6 @@ export const triageAnalysisSchema = z.object({
       }),
     )
     .max(10),
-  acceptanceCriteria: z.array(z.string().min(1).max(1000)).max(10),
   missingInformation: z.array(z.string().min(1).max(1000)).max(10),
   priorityReason: z.string().min(1).max(2000),
 });
@@ -51,7 +52,10 @@ export type Priority = "P0" | "P1" | "P2" | "P3" | "pending";
 
 export interface TriageDecision {
   analysis: TriageAnalysis;
-  normalizedTitle: string;
+  classification: {
+    label: string | null;
+    source: "existing" | "analysis" | "unknown" | "conflict";
+  };
   priority: Priority;
   labels: string[];
   duplicateIssueNumber: number | null;

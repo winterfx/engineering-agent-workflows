@@ -1,10 +1,5 @@
-import type {
-  GitHubComment,
-  GitHubIssue,
-  IssueCandidate,
-} from "../github/types.js";
-import { labelNames } from "../github/types.js";
-import type { GitHubIssuesClient } from "../github/client.js";
+import type { IssuesClient } from "../issues/client.js";
+import type { Issue, IssueCandidate, IssueComment } from "../issues/types.js";
 import {
   buildTriageComment,
   COMMENT_MARKER_PREFIX,
@@ -19,7 +14,7 @@ import {
 import { triageSubmissionSchema, type TriageDecision } from "./schema.js";
 
 export interface IssueTriageToolDependencies {
-  github: GitHubIssuesClient;
+  issues: IssuesClient;
   policy: TriagePolicy;
   botLogin?: string;
 }
@@ -31,8 +26,8 @@ export interface PreparedIssueTriage {
   repository: string;
   issueNumber: number;
   issueFingerprint: string;
-  issue?: GitHubIssue;
-  comments?: GitHubComment[];
+  issue?: Issue;
+  comments?: IssueComment[];
   candidates?: IssueCandidate[];
   warnings?: string[];
 }
@@ -44,7 +39,6 @@ export interface AppliedIssueTriage {
   repository: string;
   issueNumber: number;
   applied: boolean;
-  titleChanged?: boolean;
   commentAction?: "created" | "updated" | "unchanged" | "dry-run";
   decision?: TriageDecision;
   proposedComment?: string;
@@ -56,10 +50,21 @@ export async function prepareIssueTriage(
   issueNumber: number,
   dependencies: IssueTriageToolDependencies,
 ): Promise<PreparedIssueTriage> {
-  const [issue, comments] = await Promise.all([
-    dependencies.github.getIssue(repository, issueNumber),
-    dependencies.github.listComments(repository, issueNumber),
-  ]);
+  const issue = await dependencies.issues.getIssue(repository, issueNumber);
+  if (hasSkipLabel(issue.labels, dependencies.policy.skipLabels)) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: "issue has a configured skip-triage label",
+      repository,
+      issueNumber,
+      issueFingerprint: issueFingerprint(issue),
+    };
+  }
+  const comments = await dependencies.issues.listComments(
+    repository,
+    issueNumber,
+  );
   const contextComments = selectContextComments(
     comments,
     dependencies.botLogin,
@@ -84,7 +89,7 @@ export async function prepareIssueTriage(
   }
 
   const { candidates, warnings } = await loadCandidates(
-    dependencies.github,
+    dependencies.issues,
     repository,
     issue,
     dependencies.policy.maxCandidates,
@@ -109,11 +114,22 @@ export async function applyIssueTriage(
   dependencies: IssueTriageToolDependencies,
 ): Promise<AppliedIssueTriage> {
   const submission = triageSubmissionSchema.parse(submissionInput);
+  const issue = await dependencies.issues.getIssue(repository, issueNumber);
+  if (hasSkipLabel(issue.labels, dependencies.policy.skipLabels)) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: "issue has a configured skip-triage label",
+      repository,
+      issueNumber,
+      applied: false,
+    };
+  }
   const botLogin = requiredBotLogin(apply, dependencies.botLogin);
-  const [issue, comments] = await Promise.all([
-    dependencies.github.getIssue(repository, issueNumber),
-    dependencies.github.listComments(repository, issueNumber),
-  ]);
+  const comments = await dependencies.issues.listComments(
+    repository,
+    issueNumber,
+  );
   const contextComments = selectContextComments(comments, botLogin);
   const currentFingerprint = issueFingerprint(issue, contextComments);
   if (currentFingerprint !== submission.issueFingerprint) {
@@ -135,7 +151,7 @@ export async function applyIssueTriage(
   }
 
   const { candidates, warnings } = await loadCandidates(
-    dependencies.github,
+    dependencies.issues,
     repository,
     issue,
     dependencies.policy.maxCandidates,
@@ -144,21 +160,19 @@ export async function applyIssueTriage(
     submission.analysis,
     candidates,
     dependencies.policy,
+    issue.labels,
   );
-  const targetTitle = decision.normalizedTitle || issue.title;
-  const targetIssue = { ...issue, title: targetTitle };
-  const targetFingerprint = issueFingerprint(targetIssue, contextComments);
   const proposedComment = buildTriageComment(
     issueNumber,
-    targetFingerprint,
+    currentFingerprint,
     decision,
   );
   const desiredLabels = mergeManagedLabels(
-    labelNames(issue),
+    issue.labels,
     decision.labels,
     dependencies.policy.managedLabelPrefixes,
   );
-  const existingLabels = labelNames(issue);
+  const existingLabels = issue.labels;
   const labelsToAdd = desiredLabels.filter(
     (label) => !existingLabels.includes(label),
   );
@@ -167,8 +181,6 @@ export async function applyIssueTriage(
       isManagedLabel(label, dependencies.policy.managedLabelPrefixes) &&
       !desiredLabels.includes(label),
   );
-  const titleChanged = targetTitle !== issue.title;
-  const labelsChanged = labelsToAdd.length > 0 || labelsToRemove.length > 0;
   const existingComment = findTriageComment(comments, botLogin);
 
   if (!apply) {
@@ -177,7 +189,6 @@ export async function applyIssueTriage(
       repository,
       issueNumber,
       applied: false,
-      titleChanged,
       commentAction: "dry-run",
       decision,
       proposedComment,
@@ -186,32 +197,28 @@ export async function applyIssueTriage(
   }
 
   await ensureLabels(
-    dependencies.github,
+    dependencies.issues,
     repository,
     decision.labels,
     dependencies.policy,
   );
-  if (titleChanged) {
-    await dependencies.github.updateIssue(repository, issueNumber, {
-      title: targetTitle,
-    });
-  }
-  await dependencies.github.addLabels(repository, issueNumber, labelsToAdd);
+  await dependencies.issues.addLabels(repository, issueNumber, labelsToAdd);
   for (const label of labelsToRemove) {
-    await dependencies.github.removeLabel(repository, issueNumber, label);
+    await dependencies.issues.removeLabel(repository, issueNumber, label);
   }
 
   let commentAction: AppliedIssueTriage["commentAction"] = "unchanged";
   if (!existingComment) {
-    await dependencies.github.createComment(
+    await dependencies.issues.createComment(
       repository,
       issueNumber,
       proposedComment,
     );
     commentAction = "created";
   } else if (existingComment.body !== proposedComment) {
-    await dependencies.github.updateComment(
+    await dependencies.issues.updateComment(
       repository,
+      issueNumber,
       existingComment.id,
       proposedComment,
     );
@@ -223,7 +230,6 @@ export async function applyIssueTriage(
     repository,
     issueNumber,
     applied: true,
-    titleChanged,
     commentAction,
     decision,
     ...(warnings.length > 0 ? { warnings } : {}),
@@ -231,14 +237,14 @@ export async function applyIssueTriage(
 }
 
 async function loadCandidates(
-  github: GitHubIssuesClient,
+  issues: IssuesClient,
   repository: string,
-  issue: GitHubIssue,
+  issue: Issue,
   limit: number,
 ): Promise<{ candidates: IssueCandidate[]; warnings: string[] }> {
   try {
     return {
-      candidates: await github.searchCandidates(repository, issue, limit),
+      candidates: await issues.searchCandidates(repository, issue, limit),
       warnings: [],
     };
   } catch (error) {
@@ -252,7 +258,7 @@ async function loadCandidates(
 }
 
 function hasCurrentTriageComment(
-  comments: GitHubComment[],
+  comments: IssueComment[],
   issueNumber: number,
   fingerprint: string,
   botLogin?: string,
@@ -266,9 +272,9 @@ function hasCurrentTriageComment(
 }
 
 function findTriageComment(
-  comments: GitHubComment[],
+  comments: IssueComment[],
   botLogin?: string,
-): GitHubComment | undefined {
+): IssueComment | undefined {
   return comments.find(
     (comment) =>
       isManagedTriageComment(comment, botLogin) &&
@@ -277,7 +283,7 @@ function findTriageComment(
 }
 
 function isManagedTriageComment(
-  comment: GitHubComment,
+  comment: IssueComment,
   botLogin?: string,
 ): boolean {
   const expectedLogin = botLogin?.trim().toLowerCase();
@@ -287,9 +293,9 @@ function isManagedTriageComment(
 }
 
 function selectContextComments(
-  comments: GitHubComment[],
+  comments: IssueComment[],
   botLogin?: string,
-): GitHubComment[] {
+): IssueComment[] {
   return comments
     .filter(
       (comment) =>
@@ -310,7 +316,7 @@ function requiredBotLogin(
 ): string | undefined {
   const normalized = botLogin?.trim();
   if (apply && !normalized) {
-    throw new Error("ISSUE_TRIAGE_BOT_LOGIN is required in apply mode");
+    throw new Error("provider bot username is required in apply mode");
   }
   return normalized || undefined;
 }
@@ -319,17 +325,27 @@ function isManagedLabel(label: string, managedPrefixes: string[]): boolean {
   return managedPrefixes.some((prefix) => label.startsWith(prefix));
 }
 
+function hasSkipLabel(labels: string[], skipLabels: string[]): boolean {
+  const normalizedSkipLabels = new Set(
+    skipLabels.map((label) => label.trim().toLowerCase()),
+  );
+  return labels.some((label) =>
+    normalizedSkipLabels.has(label.trim().toLowerCase()),
+  );
+}
+
 async function ensureLabels(
-  github: GitHubIssuesClient,
+  issues: IssuesClient,
   repository: string,
   labels: string[],
   policy: TriagePolicy,
 ): Promise<void> {
   for (const label of labels) {
-    await github.ensureLabel(
+    await issues.ensureLabel(
       repository,
       label,
       policy.labelColors[label] ?? "ededed",
+      policy.labelDescriptions[label],
     );
   }
 }

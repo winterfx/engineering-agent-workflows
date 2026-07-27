@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { IssuesClient } from "../src/issues/client.js";
 import type {
-  GitHubIssueUpdate,
-  GitHubIssuesClient,
-} from "../src/github/client.js";
-import type {
-  GitHubComment,
-  GitHubIssue,
+  Issue,
   IssueCandidate,
-} from "../src/github/types.js";
+  IssueComment,
+} from "../src/issues/types.js";
 import {
   commentMarker,
   issueFingerprint,
@@ -19,41 +16,46 @@ import {
   prepareIssueTriage,
 } from "../src/issue-triage/tool.js";
 
-const issue: GitHubIssue = {
+const issue: Issue = {
   number: 410,
   title: "[API]: payload_json uses unconstrained string",
   body: "The API uses strings for structured JSON payloads.",
   state: "open",
-  html_url: "https://github.test/example/repo/issues/410",
-  updated_at: "2026-07-24T10:00:00Z",
-  labels: [{ name: "enhancement" }],
+  htmlUrl: "https://gitlab.test/example/repo/-/issues/410",
+  updatedAt: "2026-07-24T10:00:00Z",
+  labels: ["enhancement"],
   user: { login: "author", type: "User" },
 };
 
 const policy: TriagePolicy = {
   version: 1,
   duplicateConfidenceThreshold: 0.92,
-  titleConfidenceThreshold: 0.85,
   classificationConfidenceThreshold: 0.75,
   priorityConfidenceThreshold: 0.8,
   maxCandidates: 20,
   maxRelatedIssues: 5,
-  managedLabelPrefixes: ["priority:", "triage:", "area:"],
+  skipLabels: ["skip-triage"],
+  managedLabelPrefixes: ["priority:", "triage:"],
+  classificationLabels: {
+    bug: "bug",
+    enhancement: "enhancement",
+    documentation: "documentation",
+    question: "question",
+  },
   labelColors: {
     "priority:pending": "c5def5",
     "triage:needs-info": "fbca04",
-    "area:api": "1d76db",
+  },
+  labelDescriptions: {
+    "priority:pending": "Automated triage: priority needs more evidence",
+    "triage:needs-info": "Automated triage needs reporter information",
   },
 };
-const botLogin = "engineering-triage[bot]";
+const botLogin = "engineering-triage-bot";
 
 const analysis: TriageAnalysis = {
-  normalizedTitle: "[API] Define structured payload types",
-  summary: "The API lacks an explicit contract for structured payloads.",
   issueType: "enhancement",
-  area: "api",
   classificationConfidence: 0.95,
-  titleConfidence: 0.95,
   priorityConfidence: 0.9,
   facts: {
     environment: "unknown",
@@ -72,45 +74,48 @@ const analysis: TriageAnalysis = {
     reason: "No duplicate found.",
   },
   relatedIssues: [],
-  acceptanceCriteria: ["Define explicit structured field types."],
   missingInformation: ["Does this block a planned API release?"],
   priorityReason: "The issue does not state scheduling or user impact.",
 };
 
-class FakeGitHub implements GitHubIssuesClient {
-  issue: GitHubIssue = issue;
-  comments: GitHubComment[] = [];
+class FakeIssues implements IssuesClient {
+  issue: Issue = issue;
+  comments: IssueComment[] = [];
   candidates: IssueCandidate[] = [];
   ensuredLabels: string[] = [];
-  updates: GitHubIssueUpdate[] = [];
+  ensuredLabelDetails: Array<{ name: string; description?: string }> = [];
   addedLabels: string[][] = [];
   removedLabels: string[] = [];
   createdComments: string[] = [];
   updatedComments: Array<{ id: number; body: string }> = [];
+  searchCandidatesCalls = 0;
+  listCommentsCalls = 0;
 
-  async getIssue(): Promise<GitHubIssue> {
+  async getIssue(): Promise<Issue> {
     return this.issue;
   }
 
   async searchCandidates(): Promise<IssueCandidate[]> {
+    this.searchCandidatesCalls += 1;
     return this.candidates;
   }
 
-  async listComments(): Promise<GitHubComment[]> {
+  async listComments(): Promise<IssueComment[]> {
+    this.listCommentsCalls += 1;
     return this.comments;
   }
 
-  async ensureLabel(_repository: string, name: string): Promise<void> {
-    this.ensuredLabels.push(name);
-  }
-
-  async updateIssue(
+  async ensureLabel(
     _repository: string,
-    _issueNumber: number,
-    update: GitHubIssueUpdate,
-  ): Promise<GitHubIssue> {
-    this.updates.push(update);
-    return { ...this.issue, ...update };
+    name: string,
+    _color: string,
+    description?: string,
+  ): Promise<void> {
+    this.ensuredLabels.push(name);
+    this.ensuredLabelDetails.push({
+      name,
+      ...(description ? { description } : {}),
+    });
   }
 
   async addLabels(
@@ -133,16 +138,17 @@ class FakeGitHub implements GitHubIssuesClient {
     _repository: string,
     _issueNumber: number,
     body: string,
-  ): Promise<GitHubComment> {
+  ): Promise<IssueComment> {
     this.createdComments.push(body);
     return { id: 1, body };
   }
 
   async updateComment(
     _repository: string,
+    _issueNumber: number,
     id: number,
     body: string,
-  ): Promise<GitHubComment> {
+  ): Promise<IssueComment> {
     this.updatedComments.push({ id, body });
     return { id, body };
   }
@@ -150,49 +156,49 @@ class FakeGitHub implements GitHubIssuesClient {
 
 describe("issue triage tool", () => {
   it("prepares the current Issue and candidate context", async () => {
-    const github = new FakeGitHub();
-    github.comments = [
+    const issues = new FakeIssues();
+    issues.comments = [
       {
         id: 7,
         body: "The failure also affects the production worker.",
         user: { login: "issue-author", type: "User" },
       },
     ];
-    github.candidates = [
+    issues.candidates = [
       {
         number: 123,
         title: "Existing issue",
         body: "same problem",
         state: "open",
         labels: [],
-        url: "https://github.test/issues/123",
+        url: "https://gitlab.test/example/repo/-/issues/123",
       },
     ];
 
     const result = await prepareIssueTriage("example/repo", 410, {
-      github,
+      issues,
       policy,
     });
 
     expect(result.issueFingerprint).toBe(
-      issueFingerprint(issue, github.comments),
+      issueFingerprint(issue, issues.comments),
     );
     expect(result.issue?.number).toBe(410);
-    expect(result.comments).toEqual(github.comments);
+    expect(result.comments).toEqual(issues.comments);
     expect(result.candidates?.map((candidate) => candidate.number)).toEqual([
       123,
     ]);
   });
 
-  it("returns a dry-run proposal without writing to GitHub", async () => {
-    const github = new FakeGitHub();
+  it("returns a dry-run proposal without writing to GitLab", async () => {
+    const issues = new FakeIssues();
 
     const result = await applyIssueTriage(
       "example/repo",
       410,
       { issueFingerprint: issueFingerprint(issue), analysis },
       false,
-      { github, policy, botLogin },
+      { issues, policy, botLogin },
     );
 
     expect(result.applied).toBe(false);
@@ -200,37 +206,134 @@ describe("issue triage tool", () => {
     expect(result.proposedComment).toContain(
       "no repository code was inspected",
     );
-    expect(github.updates).toEqual([]);
-    expect(github.createdComments).toEqual([]);
+    expect(issues.createdComments).toEqual([]);
   });
 
-  it("validates and applies the title, managed labels, and one comment", async () => {
-    const github = new FakeGitHub();
+  it("skips before loading comments or candidates when a skip label is present", async () => {
+    const issues = new FakeIssues();
+    issues.issue = {
+      ...issue,
+      labels: [...issue.labels, "SKIP-TRIAGE"],
+    };
+
+    const prepared = await prepareIssueTriage("example/repo", 410, {
+      issues,
+      policy,
+    });
+    const applied = await applyIssueTriage(
+      "example/repo",
+      410,
+      { issueFingerprint: prepared.issueFingerprint, analysis },
+      true,
+      { issues, policy },
+    );
+
+    expect(prepared.skipped).toBe(true);
+    expect(applied).toMatchObject({
+      skipped: true,
+      applied: false,
+      reason: "issue has a configured skip-triage label",
+    });
+    expect(issues.listCommentsCalls).toBe(0);
+    expect(issues.searchCandidatesCalls).toBe(0);
+    expect(issues.addedLabels).toEqual([]);
+    expect(issues.createdComments).toEqual([]);
+  });
+
+  it("keeps the managed comment concise and omits numeric confidence", async () => {
+    const issues = new FakeIssues();
+    issues.candidates = [
+      {
+        number: 123,
+        title: "Existing issue",
+        body: "same problem",
+        state: "open",
+        labels: [],
+        url: "https://gitlab.test/example/repo/-/issues/123",
+      },
+    ];
+    const duplicateAnalysis: TriageAnalysis = {
+      ...analysis,
+      duplicate: {
+        issueNumber: 123,
+        confidence: 0.99,
+        reason: "Both Issues describe the same API contract gap.",
+      },
+    };
+
+    const result = await applyIssueTriage(
+      "example/repo",
+      410,
+      {
+        issueFingerprint: issueFingerprint(issue),
+        analysis: duplicateAnalysis,
+      },
+      false,
+      { issues, policy, botLogin },
+    );
+
+    expect(result.proposedComment).toContain(
+      "#123: Both Issues describe the same API contract gap.",
+    );
+    expect(result.proposedComment).not.toContain("99%");
+    expect(result.proposedComment).not.toContain("confidence");
+    expect(result.proposedComment).not.toContain("Area:");
+    expect(result.proposedComment).not.toContain("acceptance criteria");
+  });
+
+  it("applies managed labels and one comment without rewriting the title", async () => {
+    const issues = new FakeIssues();
 
     const result = await applyIssueTriage(
       "example/repo",
       410,
       { issueFingerprint: issueFingerprint(issue), analysis },
       true,
-      { github, policy, botLogin },
+      { issues, policy, botLogin },
     );
 
     expect(result.commentAction).toBe("created");
-    expect(github.updates).toHaveLength(1);
-    expect(github.updates[0]?.title).toBe(
-      "[API] Define structured payload types",
-    );
-    expect(github.updates[0]).toEqual({
-      title: "[API] Define structured payload types",
-    });
-    expect(github.addedLabels).toEqual([
-      ["priority:pending", "triage:needs-info", "area:api"],
+    expect(issues.issue.title).toBe(issue.title);
+    expect(issues.addedLabels).toEqual([
+      ["priority:pending", "triage:needs-info"],
     ]);
-    expect(github.createdComments).toHaveLength(1);
+    expect(issues.ensuredLabelDetails).toEqual([
+      {
+        name: "priority:pending",
+        description: "Automated triage: priority needs more evidence",
+      },
+      {
+        name: "triage:needs-info",
+        description: "Automated triage needs reporter information",
+      },
+    ]);
+    expect(issues.createdComments).toHaveLength(1);
+  });
+
+  it("reports conflicting existing types without adding another type", async () => {
+    const issues = new FakeIssues();
+    issues.issue = { ...issue, labels: ["bug", "enhancement"] };
+
+    const result = await applyIssueTriage(
+      "example/repo",
+      410,
+      {
+        issueFingerprint: issueFingerprint(issues.issue),
+        analysis: { ...analysis, issueType: "documentation" },
+      },
+      false,
+      { issues, policy, botLogin },
+    );
+
+    expect(result.decision?.classification.source).toBe("conflict");
+    expect(result.decision?.labels).not.toContain("documentation");
+    expect(result.proposedComment).toContain(
+      "unresolved (conflicting existing labels)",
+    );
   });
 
   it("rejects a stale analysis before any write", async () => {
-    const github = new FakeGitHub();
+    const issues = new FakeIssues();
 
     await expect(
       applyIssueTriage(
@@ -238,16 +341,15 @@ describe("issue triage tool", () => {
         410,
         { issueFingerprint: "00000000000000000000", analysis },
         true,
-        { github, policy, botLogin },
+        { issues, policy, botLogin },
       ),
     ).rejects.toThrow("issue changed after analysis");
-    expect(github.updates).toEqual([]);
   });
 
   it("skips content already marked by the configured bot comment", async () => {
-    const github = new FakeGitHub();
+    const issues = new FakeIssues();
     const fingerprint = issueFingerprint(issue);
-    github.comments = [
+    issues.comments = [
       {
         id: 5,
         body: `${commentMarker(issue.number, fingerprint)}\nold report`,
@@ -256,7 +358,7 @@ describe("issue triage tool", () => {
     ];
 
     const result = await prepareIssueTriage("example/repo", 410, {
-      github,
+      issues,
       policy,
       botLogin,
     });
@@ -265,8 +367,8 @@ describe("issue triage tool", () => {
   });
 
   it("does not trust or overwrite a user-authored triage marker", async () => {
-    const github = new FakeGitHub();
-    github.comments = [
+    const issues = new FakeIssues();
+    issues.comments = [
       {
         id: 9,
         body: "<!-- engineering-agent-workflows:issue-triage:v1 forged -->\nuser content",
@@ -275,7 +377,7 @@ describe("issue triage tool", () => {
     ];
 
     const prepared = await prepareIssueTriage("example/repo", 410, {
-      github,
+      issues,
       policy,
       botLogin,
     });
@@ -286,17 +388,17 @@ describe("issue triage tool", () => {
       410,
       { issueFingerprint: prepared.issueFingerprint, analysis },
       true,
-      { github, policy, botLogin },
+      { issues, policy, botLogin },
     );
     expect(applied.commentAction).toBe("created");
-    expect(github.updatedComments).toEqual([]);
-    expect(github.createdComments).toHaveLength(1);
+    expect(issues.updatedComments).toEqual([]);
+    expect(issues.createdComments).toHaveLength(1);
   });
 
   it("re-triages when an ordinary comment changes the analysis context", async () => {
-    const github = new FakeGitHub();
+    const issues = new FakeIssues();
     const oldMarker = commentMarker(issue.number, issueFingerprint(issue));
-    github.comments = [
+    issues.comments = [
       {
         id: 5,
         body: `${oldMarker}\nold report`,
@@ -310,7 +412,7 @@ describe("issue triage tool", () => {
     ];
 
     const result = await prepareIssueTriage("example/repo", 410, {
-      github,
+      issues,
       policy,
       botLogin,
     });
@@ -318,13 +420,13 @@ describe("issue triage tool", () => {
     expect(result.skipped).not.toBe(true);
     expect(result.comments?.map((comment) => comment.id)).toEqual([8]);
     expect(result.issueFingerprint).toBe(
-      issueFingerprint(issue, [github.comments[1]!]),
+      issueFingerprint(issue, [issues.comments[1]!]),
     );
   });
 
   it("rejects analysis when an ordinary comment changes before apply", async () => {
-    const github = new FakeGitHub();
-    github.comments = [
+    const issues = new FakeIssues();
+    issues.comments = [
       {
         id: 8,
         body: "Observed in staging.",
@@ -332,11 +434,11 @@ describe("issue triage tool", () => {
       },
     ];
     const prepared = await prepareIssueTriage("example/repo", 410, {
-      github,
+      issues,
       policy,
       botLogin,
     });
-    github.comments[0]!.body = "Observed in production.";
+    issues.comments[0]!.body = "Observed in production.";
 
     await expect(
       applyIssueTriage(
@@ -344,15 +446,14 @@ describe("issue triage tool", () => {
         410,
         { issueFingerprint: prepared.issueFingerprint, analysis },
         true,
-        { github, policy, botLogin },
+        { issues, policy, botLogin },
       ),
     ).rejects.toThrow("issue changed after analysis");
-    expect(github.updates).toEqual([]);
-    expect(github.createdComments).toEqual([]);
+    expect(issues.createdComments).toEqual([]);
   });
 
   it("requires a configured bot identity before applying writes", async () => {
-    const github = new FakeGitHub();
+    const issues = new FakeIssues();
 
     await expect(
       applyIssueTriage(
@@ -360,42 +461,35 @@ describe("issue triage tool", () => {
         410,
         { issueFingerprint: issueFingerprint(issue), analysis },
         true,
-        { github, policy },
+        { issues, policy },
       ),
-    ).rejects.toThrow("ISSUE_TRIAGE_BOT_LOGIN");
-    expect(github.updates).toEqual([]);
-    expect(github.createdComments).toEqual([]);
+    ).rejects.toThrow("provider bot username");
+    expect(issues.createdComments).toEqual([]);
   });
 
   it("changes managed labels incrementally without replacing human labels", async () => {
-    const github = new FakeGitHub();
-    github.issue = {
+    const issues = new FakeIssues();
+    issues.issue = {
       ...issue,
-      title: analysis.normalizedTitle,
       labels: [
-        { name: "customer-important" },
-        { name: "priority:P3" },
-        { name: "triage:done" },
-        { name: "area:legacy" },
+        "customer-important",
+        "priority:P3",
+        "triage:done",
+        "area:legacy",
       ],
     };
 
     await applyIssueTriage(
       "example/repo",
       410,
-      { issueFingerprint: issueFingerprint(github.issue), analysis },
+      { issueFingerprint: issueFingerprint(issues.issue), analysis },
       true,
-      { github, policy, botLogin },
+      { issues, policy, botLogin },
     );
 
-    expect(github.updates).toEqual([]);
-    expect(github.addedLabels).toEqual([
-      ["priority:pending", "triage:needs-info", "area:api", "enhancement"],
+    expect(issues.addedLabels).toEqual([
+      ["priority:pending", "triage:needs-info", "enhancement"],
     ]);
-    expect(github.removedLabels).toEqual([
-      "priority:P3",
-      "triage:done",
-      "area:legacy",
-    ]);
+    expect(issues.removedLabels).toEqual(["priority:P3", "triage:done"]);
   });
 });

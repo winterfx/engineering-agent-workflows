@@ -4,3 +4,5 @@ coverage/
 .env
 .DS_Store
 *.log
+.draft-pr-workspaces/*
+!.draft-pr-workspaces/.gitkeep

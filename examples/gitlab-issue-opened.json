@@ -1,0 +1,26 @@
+{
+  "topic": "webhook.gitlab.issue",
+  "createdAt": "2026-07-24T10:00:00Z",
+  "payload": {
+    "body": {
+      "object_kind": "issue",
+      "event_type": "issue",
+      "user": {
+        "username": "example-user"
+      },
+      "user_username": "example-user",
+      "project": {
+        "path_with_namespace": "example/agent-compose",
+        "default_branch": "main"
+      },
+      "object_attributes": {
+        "iid": 410,
+        "action": "open",
+        "title": "[API]: payload_json 等结构化字段使用无约束 string",
+        "description": "多个 API 使用 string 承载 JSON，缺少结构约束和兼容性说明。",
+        "state": "opened",
+        "url": "https://gitlab.example.com/example/agent-compose/-/issues/410"
+      }
+    }
+  }
+}

@@ -1,116 +1,261 @@
 # engineering-agent-workflows
 
-Versioned AI workflows for software engineering automation. The first workflow, `issue-triage`, processes GitHub Issues without cloning the target repository.
+Versioned AI workflows for Issue triage and maintainer-approved repository
+changes. Event ingestion stays thin; policy, validation, and provider writes live
+in deterministic TypeScript boundaries.
 
-## Issue triage workflow
+## Workflows
+
+### Issue Triage Agent
+
+The Issue Triage Agent supports GitLab and GitHub. It:
+
+1. receives an Issue or ordinary comment event;
+2. loads current Issue context and duplicate candidates through the provider API;
+3. asks the Agent for advisory classification facts;
+4. validates the response and calculates priority in deterministic code; and
+5. updates managed labels and one concise managed comment in apply mode.
+
+It preserves the Issue title and unmanaged labels, never creates or manages
+`area:*`, and never adds `agent:ready`. A configured skip label such as
+`skip-triage` stops the workflow. For `labeled` and `unlabeled` events, only a
+change to the skip label retriggers triage, preventing loops from `agent:*`
+state transitions.
+
+### Draft PR Agent
+
+The Draft PR Agent is GitHub-only and currently allowlisted to
+`chaitin/agent-compose`. A maintainer starts it by adding `agent:ready` to an
+open Issue. The state flow is:
+
+```text
+agent:ready ──▶ agent:running ──┬──▶ agent:pr-open
+                               ├──▶ agent:needs-approval
+                               └──▶ agent:failed
+
+agent:needs-approval + agent:approved ──▶ agent:running
+```
 
 The workflow:
 
-1. receives a GitHub `issues` or `issue_comment` webhook envelope;
-2. invokes the configured agent with the `issue-triage` Skill;
-3. uses the bundled tool to load the current Issue, ordinary comments, and candidate Issues;
-4. asks the agent for structured advisory analysis;
-5. validates that analysis and calculates priority with deterministic code;
-6. preserves unmanaged labels and rejects stale Issue content;
-7. creates or updates one managed triage comment.
+1. verifies the Issue, labels, repository allowlist, and absence of an existing
+   open PR or remote branch for `codex/issue-<number>`;
+2. clones the default branch into a per-Issue shared workspace and claims the
+   Issue in apply mode;
+3. lets the Agent edit uncommitted files and run focused checks without provider
+   credentials;
+4. rejects stale Issue context, a moved or committed `HEAD`, empty or malformed
+   diffs, reported failed tests, secret-like added lines, and policy-gated risk;
+5. commits and pushes through the trusted outer Git boundary; and
+6. creates a Draft Pull Request and records its URL on the Issue.
 
-The Scheduler keeps GitHub credentials and the trusted Issue target outside the
-agent call. The agent receives prepared context with `GITHUB_TOKEN` removed and
-returns analysis JSON only; deterministic Scheduler-side tool calls perform any
-GitHub writes.
+`agent:approved` reruns the implementation with approval for the previously
+reported high-risk class; the temporary diff from the paused run is not
+retained. The workflow only opens Draft PRs. It never merges, marks a PR ready,
+closes an Issue, or rewrites Issue content.
 
-The first version never closes Issues and never clones the target repository. It defaults to dry-run.
+The trusted Scheduler/tool owns `GITHUB_TOKEN`, Git authentication, the Issue
+target binding, validation, and all GitHub writes. The Agent sees the prepared
+Issue context and writable repository path, but its GitHub/GitLab token variables
+are cleared. The Git remote remains credential-free HTTPS; the outer tool uses a
+temporary `GIT_ASKPASS` boundary for clone and push.
+
+Dry-run mode still clones the repository and lets the Agent produce and validate
+a temporary local diff. It does not change labels, comments, branches, or Pull
+Requests, and cleans the per-Issue workspace after evaluation.
+
+### MonkeyScan review fixes
+
+The same Draft PR Agent processes ordinary Conversation comments and inline
+Review Comments posted by the configured MonkeyScan bot on an open
+Agent-managed Draft PR. It does not reuse the Issue implementation sandbox.
+Each attempt uses a new Agent sandbox and a fresh shallow clone of the current
+`codex/issue-*` branch.
+
+All unprocessed MonkeyScan comments visible on one PR are sorted by comment ID
+and handled as one batch, producing at most one commit and one non-force push.
+Inline findings include their file path, line location, diff hunk, and referenced
+commit metadata. The deterministic tool verifies the bot login and optional
+numeric user ID, the allowlisted head repository, Draft/open state, managed
+branch prefix, comment fingerprint, and current head SHA. A per-PR lock prevents
+concurrent pushes.
+
+A managed PR comment stores separate Conversation and Review Comment cursors,
+the current head SHA, and fix iteration count. Existing v1 Conversation cursors
+remain readable. A one-minute Scheduler reconciliation finds comments whose
+webhook overlapped another run. Automatic fixes stop after three batches or when
+the diff crosses the existing approval gates. MonkeyScan comments are untrusted
+findings: the Agent must verify each one against code and cannot edit, reply to,
+or resolve scanner review threads.
+
+## Label ownership
+
+The Issue Triage Agent uses the repository's existing type taxonomy:
+`bug`, `enhancement`, `documentation`, and `question`. It emits `unknown` when
+the Issue does not fit or lacks evidence; `unknown` never becomes a Label.
+
+- If an Issue already has exactly one recognized type Label, that human-authored
+  classification wins and the Agent does not add a conflicting type.
+- If it has multiple recognized type Labels, triage reports the classification
+  as unresolved and preserves all of them for maintainer resolution.
+- If it has no type Label, a sufficiently confident analysis may add one.
+- Only `priority:*` and `triage:*` are replaceable managed namespaces.
+- `duplicate` may be added from a high-confidence candidate match but is never
+  used to close the Issue.
+- `invalid`, `wontfix`, `good first issue`, `help wanted`,
+  `protobuf-breaking-approved`, all `agent:*`, and all `area:*` Labels are
+  preserved and never managed by triage.
+- `skip-triage` is a case-insensitive human control Label that stops the
+  workflow before Agent analysis. Create it during repository setup; triage
+  intentionally does not create control Labels automatically.
+
+Descriptions and colors for automatically created classification, priority,
+triage, and duplicate Labels are versioned in
+`agents/issue-triage/policy.json`.
 
 ## Repository layout
 
 ```text
-agents/issue-triage/     Agent Skill, policy, and bundled deterministic tool
-src/github/              GitHub REST API boundary
-src/issue-triage/        Deterministic validation and policy source
-examples/                Webhook fixtures
-test/                    Network-free unit tests
+agents/issue-triage/     Issue Triage Skill, policy, and generated tool bundle
+agents/draft-pr/         Draft PR Skill, policy, and generated tool bundle
+loaders/                 Thin agent-compose Scheduler trigger scripts
+src/issue-triage/        Deterministic triage validation and policy
+src/draft-pr/            Draft PR policy, workspace, and orchestration
+src/github/              GitHub REST boundary and payload types
+src/gitlab/              GitLab API v4 boundary and payload types
+src/issues/              Provider-neutral Issue boundary
+examples/                GitLab and GitHub webhook fixtures
+test/                    Network-free observable-behavior tests
 ```
 
-`agent-compose.yml` contains the trusted `scheduler.on(...)` event adapter. It
-runs target-bound preparation, passes the prepared context to
-`scheduler.agent(...)`, and applies validated output; no repository clone or
-per-event dependency installation is performed. Do not edit the generated
-`agents/issue-triage/scripts/issue-triage.mjs` bundle directly—run
-`npm run build` after changing `src/`.
+`agent-compose.yml` references the loader files. The CLI snapshots them during
+`agent-compose config/up`; they are not dynamically loaded by the daemon. Do not
+edit generated files under `agents/*/scripts/` directly. Run `npm run build`
+after changing `src/`.
 
-The project definition is [`agent-compose.yml`](./agent-compose.yml). Copy
-`.env.example` to `.env` before validation or apply. Daemon-side queue settings
-are provided separately in `deploy/daemon.env.example`; project `env_file`
-values do not configure the daemon process.
+The project `.env` configures Agent environments. Webhook sources and queue
+settings belong to the daemon; project environment values do not configure the
+daemon process.
 
-## Requirements
+## Requirements and permissions
 
 - Node.js 20 or newer
-- an agent-compose version that supports YAML `skills` and event schedulers
-- GitHub token or GitHub App installation token
+- an agent-compose version supporting YAML `skills`, event schedulers, and bind
+  volumes
+- GitLab API v4 and/or GitHub API access to the target project
+- a host directory at `./.draft-pr-workspaces` writable by the daemon and the
+  Draft PR Agent sandbox
 
-Recommended GitHub App repository permissions:
+For Issue triage only, a GitHub App or fine-grained token needs:
 
 - Metadata: read
 - Issues: read and write
 
-Subscribe the App or webhook adapter to the GitHub `Issues` and `Issue comment`
-events. Deliver their JSON bodies to the agent-compose topics
-`webhook.github.issues` and `webhook.github.issue_comment`, respectively.
+For the Draft PR workflow, it additionally needs:
+
+- Contents: read and write
+- Pull requests: read and write
+
+A classic GitLab access token needs `api` scope. For GitLab, enable **Issues
+events** and **Comments** and map them to `webhook.gitlab.issue` and
+`webhook.gitlab.note`. For GitHub, enable **Issues**, **Issue comments**, **Pull
+request reviews**, and **Pull request review comments**. Map them to
+`webhook.github.issues`, `webhook.github.issue_comment`,
+`webhook.github.pull_request_review`, and
+`webhook.github.pull_request_review_comment`. Pull Request payloads delivered on
+the Issues topic are ignored.
+
+Webhook secrets authenticate inbound deliveries. `GITLAB_TOKEN` and
+`GITHUB_TOKEN` are separate API credentials; never reuse a webhook secret as an
+API token.
 
 ## Configuration
 
-| Variable                 | Required                               | Purpose                                                 |
-| ------------------------ | -------------------------------------- | ------------------------------------------------------- |
-| `GITHUB_TOKEN`           | For private repositories or apply mode | GitHub API authentication                               |
-| `GITHUB_API_URL`         | No                                     | GitHub API base; defaults to `https://api.github.com`   |
-| `ISSUE_TRIAGE_MODEL`     | No                                     | Agent model override                                    |
-| `ISSUE_TRIAGE_APPLY`     | No                                     | Set to `1` to enable GitHub writes; defaults to dry-run |
-| `ISSUE_TRIAGE_BOT_LOGIN` | Required in apply mode                 | Owns the managed comment and prevents bot event loops   |
+| Variable                      | Required                         | Purpose                                                            |
+| ----------------------------- | -------------------------------- | ------------------------------------------------------------------ |
+| `GITLAB_TOKEN`                | GitLab private/read or apply     | GitLab API authentication                                          |
+| `GITLAB_API_URL`              | No                               | Defaults to `https://gitlab.com/api/v4`                            |
+| `GITLAB_BOT_USERNAME`         | GitLab apply mode                | Owns the managed Note and prevents bot loops                       |
+| `GITHUB_TOKEN`                | GitHub Draft PR or private/apply | GitHub API and outer Git authentication                            |
+| `GITHUB_API_URL`              | No                               | Defaults to `https://api.github.com`                               |
+| `GITHUB_SERVER_URL`           | No                               | Credential-free Git clone origin; defaults to `https://github.com` |
+| `GITHUB_BOT_LOGIN`            | GitHub apply mode                | Owns managed comments and prevents bot loops                       |
+| `GITHUB_ALLOWED_REPOSITORY`   | No                               | Optional Issue Triage allowlist                                    |
+| `ISSUE_TRIAGE_MODEL`          | No                               | Issue Triage model override                                        |
+| `ISSUE_TRIAGE_APPLY`          | No                               | `1` enables triage writes; defaults to `0`                         |
+| `DRAFT_PR_MODEL`              | No                               | Draft PR model override                                            |
+| `DRAFT_PR_APPLY`              | No                               | `1` enables claims, push, and Draft PR creation; defaults to `0`   |
+| `DRAFT_PR_ALLOWED_REPOSITORY` | Yes                              | Exact Draft PR repository allowlist                                |
+| `DRAFT_PR_GIT_AUTHOR_NAME`    | Apply mode                       | Deterministic commit author name                                   |
+| `DRAFT_PR_GIT_AUTHOR_EMAIL`   | Apply mode                       | Deterministic commit author email                                  |
+| `MONKEYSCAN_BOT_LOGIN`        | MonkeyScan review fixes          | Exact GitHub login allowed to trigger review fixes                 |
+| `MONKEYSCAN_BOT_USER_ID`      | No                               | Optional numeric GitHub user ID for stronger identity matching     |
 
-Model/provider credentials remain owned by agent-compose and are not stored in this repository.
+See `.env.example` for defaults. Model/provider credentials remain owned by
+agent-compose and are not stored in this repository.
 
 ## Local verification
 
 ```bash
-npm install
+npm ci
 npm run build
 npm run check
 agent-compose config --quiet
 ```
 
-The bundled tool can be exercised against GitHub independently of the agent:
+The deterministic tools can also be exercised independently. Commands remain
+dry-run unless their corresponding apply variable is enabled:
 
 ```bash
-GITHUB_TOKEN=... \
-npm start -- prepare --repository owner/repository --issue 123
+GITLAB_TOKEN=... npm start -- \
+  prepare --repository group/subgroup/project --issue 123
+
+GITHUB_TOKEN=... npm run start:draft-pr -- \
+  prepare --repository chaitin/agent-compose --issue 123 --trigger ready
 ```
 
-The `apply` command accepts an agent analysis file and remains dry-run unless
-`ISSUE_TRIAGE_APPLY=1` is present in the environment. Apply mode also requires
-`ISSUE_TRIAGE_BOT_LOGIN` and a trusted target binding. For a reviewed manual
-application, set `ISSUE_TRIAGE_EXPECTED_REPOSITORY` and
-`ISSUE_TRIAGE_EXPECTED_ISSUE` to the same target passed on the command line.
+Manual apply mode additionally requires matching
+`ISSUE_TRIAGE_EXPECTED_REPOSITORY` / `ISSUE_TRIAGE_EXPECTED_ISSUE` or
+`DRAFT_PR_EXPECTED_REPOSITORY` / `DRAFT_PR_EXPECTED_ISSUE` target bindings.
 
-## Deploying the workflow
+## Deployment and operations
 
-1. Run `npm ci && npm run build` from a reviewed revision.
-2. Copy `.env.example` to `.env`, configure it, and keep `ISSUE_TRIAGE_APPLY=0` initially.
-3. Add the variables from `deploy/daemon.env.example` to the agent-compose daemon environment and restart the daemon.
-4. Run `agent-compose config --quiet`, then `agent-compose up` from this repository. The local Skill is resolved and projected into the Agent sandbox.
-5. Deliver GitHub Issues webhook bodies to `/api/webhooks/webhook.github.issues` through an authenticated webhook source or adapter.
-6. Inspect dry-run results, then set `ISSUE_TRIAGE_APPLY=1` and run `agent-compose up` again.
+1. Run `npm ci && npm run build && npm run check` from a reviewed revision.
+2. Copy `.env.example` to `.env`, configure credentials, bot identity, and the
+   exact Draft PR allowlist; leave both apply variables at `0`.
+3. Create `./.draft-pr-workspaces` on storage shared by the trusted outer tool
+   and Draft PR Agent. Do not expose this directory to unrelated workloads.
+4. Configure authenticated GitLab and/or GitHub webhook sources.
+5. Add the settings from `deploy/daemon.env.example` to the daemon environment.
+   Both GitHub workflows share `webhook.github.issues`; each loader filters its
+   own actions and labels. The example permits four concurrent GitHub Issue and
+   comment deliveries; per-Issue and per-PR locks serialize the same target.
+6. Run `agent-compose config --quiet`, then `agent-compose up`.
+7. Send the fixtures under `examples/`, inspect dry-run results, then enable each
+   apply variable independently.
 
-GitHub has no native general-purpose Issue link API. References such as `#123` in the managed triage comment create GitHub cross-reference events and preserve the relationship without rewriting the Issue body.
+Only one Draft PR run may hold an Issue workspace lock. Locks older than four
+hours are treated as stale. A normal terminal result removes the workspace and
+lock. If a process is killed, inspect the corresponding agent-compose run before
+removing a stale lock or retrying.
+
+If Git push succeeds but GitHub Draft PR creation fails, the remote
+`codex/issue-<number>` branch is intentionally preserved and the Issue moves to
+`agent:failed`. The workflow never force-pushes or deletes it. A maintainer must
+inspect the branch, create the Draft PR manually or delete/rename the branch,
+then retrigger with `agent:ready`.
 
 ## Priority policy
 
-The model extracts facts; code chooses the priority:
+The triage model extracts facts; deterministic code chooses priority:
 
 - `P0`: explicit critical security impact, data loss, or production outage
-- `P1`: high security impact, release blocker, or blocked production core flow without a workaround
+- `P1`: high security impact, release blocker, or blocked production core flow
+  without a workaround
 - `P2`: explicit broad/degraded impact, SLA risk, or blocked core flow
 - `P3`: supported low-impact work
 - `pending`: insufficient evidence or low confidence
 
-Edit `agents/issue-triage/policy.json` to tune thresholds and managed labels. Keep destructive operations outside this workflow.
+Edit `agents/issue-triage/policy.json` and `agents/draft-pr/policy.json` to tune
+managed labels and thresholds. Keep destructive operations outside these
+workflows.

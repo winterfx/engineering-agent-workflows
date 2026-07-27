@@ -1,58 +1,62 @@
-export interface GitHubLabel {
-  name: string;
-}
-
-export interface GitHubUser {
+export interface GitHubUserAPI {
   login: string;
+  id?: number;
   type?: string;
 }
 
-export interface GitHubIssue {
+export interface GitHubLabelAPI {
+  name: string;
+}
+
+export interface GitHubIssueAPI {
   number: number;
   title: string;
   body: string | null;
   state: string;
   html_url: string;
   updated_at: string;
-  labels: Array<GitHubLabel | string>;
-  user?: GitHubUser;
+  labels: Array<GitHubLabelAPI | string>;
+  user?: GitHubUserAPI;
   pull_request?: unknown;
 }
 
-export interface GitHubComment {
+export interface GitHubCommentAPI {
   id: number;
   body: string;
-  user?: GitHubUser;
+  html_url?: string;
+  created_at?: string;
+  user?: GitHubUserAPI;
 }
 
-export interface GitHubIssuesWebhook {
-  action: string;
-  issue: GitHubIssue;
-  repository: {
-    full_name: string;
-    default_branch?: string;
-  };
-  sender?: GitHubUser;
-}
-
-export interface LoaderEventEnvelope {
-  topic?: string;
-  payload?: {
-    body?: unknown;
-  };
-}
-
-export interface IssueCandidate {
-  number: number;
-  title: string;
+export interface GitHubPullRequestReviewCommentAPI {
+  id: number;
   body: string;
-  state: string;
-  labels: string[];
-  url: string;
+  user?: GitHubUserAPI;
+  html_url?: string;
+  created_at?: string;
+  path: string;
+  line?: number | null;
+  original_line?: number | null;
+  start_line?: number | null;
+  original_start_line?: number | null;
+  side?: string;
+  start_side?: string;
+  diff_hunk?: string;
+  commit_id?: string;
+  original_commit_id?: string;
+  in_reply_to_id?: number;
+  pull_request_review_id?: number;
 }
 
-export function labelNames(issue: GitHubIssue): string[] {
-  return issue.labels
-    .map((label) => (typeof label === "string" ? label : label.name))
-    .filter((label) => label.trim() !== "");
+export interface GitHubRepositoryAPI {
+  default_branch: string;
+}
+
+export interface GitHubPullRequestAPI {
+  number: number;
+  html_url: string;
+  state: string;
+  draft?: boolean;
+  head: { ref: string; sha?: string; repo?: { full_name: string } | null };
+  base: { ref: string };
 }

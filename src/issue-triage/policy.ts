@@ -1,29 +1,43 @@
 import { z } from "zod";
-import type { IssueCandidate } from "../github/types.js";
+import type { IssueCandidate } from "../issues/types.js";
 import type { Priority, TriageAnalysis, TriageDecision } from "./schema.js";
 
 export const triagePolicySchema = z.object({
   version: z.number().int().positive(),
   duplicateConfidenceThreshold: z.number().min(0).max(1),
-  titleConfidenceThreshold: z.number().min(0).max(1),
   classificationConfidenceThreshold: z.number().min(0).max(1),
   priorityConfidenceThreshold: z.number().min(0).max(1),
   maxCandidates: z.number().int().min(0).max(100),
   maxRelatedIssues: z.number().int().min(0).max(20),
+  skipLabels: z.array(z.string().min(1)),
   managedLabelPrefixes: z.array(z.string().min(1)),
+  classificationLabels: z.object({
+    bug: z.string().min(1),
+    enhancement: z.string().min(1),
+    documentation: z.string().min(1),
+    question: z.string().min(1),
+  }),
   labelColors: z.record(z.string(), z.string().regex(/^[0-9a-fA-F]{6}$/)),
+  labelDescriptions: z.record(z.string(), z.string().min(1).max(100)),
 });
 
 export interface TriagePolicy {
   version: number;
   duplicateConfidenceThreshold: number;
-  titleConfidenceThreshold: number;
   classificationConfidenceThreshold: number;
   priorityConfidenceThreshold: number;
   maxCandidates: number;
   maxRelatedIssues: number;
+  skipLabels: string[];
   managedLabelPrefixes: string[];
+  classificationLabels: {
+    bug: string;
+    enhancement: string;
+    documentation: string;
+    question: string;
+  };
   labelColors: Record<string, string>;
+  labelDescriptions: Record<string, string>;
 }
 
 export function calculatePriority(
@@ -80,6 +94,7 @@ export function makeDecision(
   analysis: TriageAnalysis,
   candidates: IssueCandidate[],
   policy: TriagePolicy,
+  existingLabels: string[] = [],
 ): TriageDecision {
   const candidateNumbers = new Set(
     candidates.map((candidate) => candidate.number),
@@ -107,6 +122,11 @@ export function makeDecision(
     .slice(0, policy.maxRelatedIssues);
 
   const priority = calculatePriority(analysis, policy);
+  const classification = resolveClassification(
+    analysis,
+    existingLabels,
+    policy,
+  );
   const labels = [
     `priority:${priority}`,
     analysis.missingInformation.length > 0
@@ -114,11 +134,8 @@ export function makeDecision(
       : "triage:done",
   ];
 
-  if (
-    analysis.classificationConfidence >=
-    policy.classificationConfidenceThreshold
-  ) {
-    labels.push(`area:${analysis.area}`, analysis.issueType);
+  if (classification.source === "analysis" && classification.label) {
+    labels.push(classification.label);
   }
   if (duplicateIssueNumber !== null) {
     labels.push("duplicate");
@@ -126,15 +143,46 @@ export function makeDecision(
 
   return {
     analysis,
-    normalizedTitle: sanitizeTitle(
-      analysis.titleConfidence >= policy.titleConfidenceThreshold
-        ? analysis.normalizedTitle
-        : "",
-    ),
+    classification,
     priority,
     labels: [...new Set(labels)],
     duplicateIssueNumber,
     relatedIssues,
+  };
+}
+
+function resolveClassification(
+  analysis: TriageAnalysis,
+  existingLabels: string[],
+  policy: TriagePolicy,
+): TriageDecision["classification"] {
+  const configuredLabels = Object.values(policy.classificationLabels);
+  const normalizedConfigured = new Map(
+    configuredLabels.map((label) => [label.trim().toLowerCase(), label]),
+  );
+  const existingClassificationLabels = [
+    ...new Set(
+      existingLabels
+        .map((label) => normalizedConfigured.get(label.trim().toLowerCase()))
+        .filter((label): label is string => Boolean(label)),
+    ),
+  ];
+
+  if (existingClassificationLabels.length === 1) {
+    return { label: existingClassificationLabels[0]!, source: "existing" };
+  }
+  if (existingClassificationLabels.length > 1) {
+    return { label: null, source: "conflict" };
+  }
+  if (
+    analysis.issueType === "unknown" ||
+    analysis.classificationConfidence < policy.classificationConfidenceThreshold
+  ) {
+    return { label: null, source: "unknown" };
+  }
+  return {
+    label: policy.classificationLabels[analysis.issueType],
+    source: "analysis",
   };
 }
 
@@ -147,12 +195,4 @@ export function mergeManagedLabels(
     (label) => !managedPrefixes.some((prefix) => label.startsWith(prefix)),
   );
   return [...new Set([...preserved, ...desired])];
-}
-
-function sanitizeTitle(title: string): string {
-  return title
-    .replace(/[\r\n]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 180);
 }

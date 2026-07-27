@@ -1,47 +1,17 @@
-import type { GitHubComment, GitHubIssue, IssueCandidate } from "./types.js";
-
-export interface GitHubIssueUpdate {
-  title?: string;
-}
-
-export interface GitHubIssuesClient {
-  getIssue(repository: string, issueNumber: number): Promise<GitHubIssue>;
-  searchCandidates(
-    repository: string,
-    issue: GitHubIssue,
-    limit: number,
-  ): Promise<IssueCandidate[]>;
-  listComments(
-    repository: string,
-    issueNumber: number,
-  ): Promise<GitHubComment[]>;
-  ensureLabel(repository: string, name: string, color: string): Promise<void>;
-  updateIssue(
-    repository: string,
-    issueNumber: number,
-    update: GitHubIssueUpdate,
-  ): Promise<GitHubIssue>;
-  addLabels(
-    repository: string,
-    issueNumber: number,
-    labels: string[],
-  ): Promise<void>;
-  removeLabel(
-    repository: string,
-    issueNumber: number,
-    label: string,
-  ): Promise<void>;
-  createComment(
-    repository: string,
-    issueNumber: number,
-    body: string,
-  ): Promise<GitHubComment>;
-  updateComment(
-    repository: string,
-    commentID: number,
-    body: string,
-  ): Promise<GitHubComment>;
-}
+import type { IssuesClient } from "../issues/client.js";
+import type { Issue, IssueCandidate, IssueComment } from "../issues/types.js";
+import type {
+  DraftPullRequest,
+  PullRequestReviewComment,
+} from "../draft-pr/provider.js";
+import type {
+  GitHubCommentAPI,
+  GitHubIssueAPI,
+  GitHubLabelAPI,
+  GitHubPullRequestAPI,
+  GitHubPullRequestReviewCommentAPI,
+  GitHubRepositoryAPI,
+} from "./types.js";
 
 export interface GitHubClientOptions {
   token?: string;
@@ -49,7 +19,7 @@ export interface GitHubClientOptions {
   fetch?: typeof fetch;
 }
 
-export class GitHubClient implements GitHubIssuesClient {
+export class GitHubClient implements IssuesClient {
   readonly #token: string;
   readonly #baseUrl: string;
   readonly #fetch: typeof fetch;
@@ -63,30 +33,29 @@ export class GitHubClient implements GitHubIssuesClient {
     this.#fetch = options.fetch ?? fetch;
   }
 
-  async getIssue(
-    repository: string,
-    issueNumber: number,
-  ): Promise<GitHubIssue> {
-    return this.#request<GitHubIssue>(
+  async getIssue(repository: string, issueNumber: number): Promise<Issue> {
+    const issue = await this.#request<GitHubIssueAPI>(
       "GET",
       `/repos/${repositoryPath(repository)}/issues/${issueNumber}`,
     );
+    if (issue.pull_request) {
+      throw new Error("GitHub pull request payload is not an Issue");
+    }
+    return normalizeIssue(issue);
   }
 
   async searchCandidates(
     repository: string,
-    issue: GitHubIssue,
+    issue: Issue,
     limit: number,
   ): Promise<IssueCandidate[]> {
     const title = searchText(issue.title);
-    if (!title) {
-      return [];
-    }
+    if (!title) return [];
     const query = new URLSearchParams({
       q: `repo:${repository} is:issue in:title ${title}`,
       per_page: String(Math.min(Math.max(limit + 1, 1), 100)),
     });
-    const response = await this.#request<{ items?: GitHubIssue[] }>(
+    const response = await this.#request<{ items?: GitHubIssueAPI[] }>(
       "GET",
       `/search/issues?${query.toString()}`,
     );
@@ -101,9 +70,7 @@ export class GitHubClient implements GitHubIssuesClient {
         title: candidate.title,
         body: truncate(candidate.body ?? "", 4000),
         state: candidate.state,
-        labels: candidate.labels.map((label) =>
-          typeof label === "string" ? label : label.name,
-        ),
+        labels: labelNames(candidate.labels),
         url: candidate.html_url,
       }));
   }
@@ -111,14 +78,14 @@ export class GitHubClient implements GitHubIssuesClient {
   async listComments(
     repository: string,
     issueNumber: number,
-  ): Promise<GitHubComment[]> {
-    const comments: GitHubComment[] = [];
+  ): Promise<IssueComment[]> {
+    const comments: IssueComment[] = [];
     for (let page = 1; ; page += 1) {
-      const batch = await this.#request<GitHubComment[]>(
+      const batch = await this.#request<GitHubCommentAPI[]>(
         "GET",
         `/repos/${repositoryPath(repository)}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
       );
-      comments.push(...batch);
+      comments.push(...batch.map(normalizeComment));
       if (batch.length < 100) return comments;
     }
   }
@@ -127,32 +94,97 @@ export class GitHubClient implements GitHubIssuesClient {
     repository: string,
     name: string,
     color: string,
+    description?: string,
   ): Promise<void> {
     const path = `/repos/${repositoryPath(repository)}/labels/${encodeURIComponent(name)}`;
     const response = await this.#rawRequest("GET", path);
-    if (response.ok) {
-      return;
-    }
+    if (response.ok) return;
     if (response.status !== 404) {
       throw await responseError("GET", path, response);
     }
     await this.#request("POST", `/repos/${repositoryPath(repository)}/labels`, {
       name,
-      color,
-      description: "Managed by engineering-agent-workflows issue triage",
+      color: normalizeColor(color),
+      description:
+        description?.trim() || "Managed by engineering-agent-workflows",
     });
   }
 
-  async updateIssue(
-    repository: string,
-    issueNumber: number,
-    update: GitHubIssueUpdate,
-  ): Promise<GitHubIssue> {
-    return this.#request<GitHubIssue>(
-      "PATCH",
-      `/repos/${repositoryPath(repository)}/issues/${issueNumber}`,
-      update,
+  async getRepositoryDefaultBranch(repository: string): Promise<string> {
+    const value = await this.#request<GitHubRepositoryAPI>(
+      "GET",
+      `/repos/${repositoryPath(repository)}`,
     );
+    const branch = value.default_branch?.trim();
+    if (!branch) throw new Error("GitHub repository has no default branch");
+    return branch;
+  }
+
+  async getPullRequest(
+    repository: string,
+    pullRequestNumber: number,
+  ): Promise<DraftPullRequest> {
+    const value = await this.#request<GitHubPullRequestAPI>(
+      "GET",
+      `/repos/${repositoryPath(repository)}/pulls/${pullRequestNumber}`,
+    );
+    return normalizePullRequest(value);
+  }
+
+  async listOpenPullRequests(repository: string): Promise<DraftPullRequest[]> {
+    const values: DraftPullRequest[] = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.#request<GitHubPullRequestAPI[]>(
+        "GET",
+        `/repos/${repositoryPath(repository)}/pulls?state=open&per_page=100&page=${page}`,
+      );
+      values.push(...batch.map(normalizePullRequest));
+      if (batch.length < 100) return values;
+    }
+  }
+
+  async listReviewComments(
+    repository: string,
+    pullRequestNumber: number,
+  ): Promise<PullRequestReviewComment[]> {
+    const comments: PullRequestReviewComment[] = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.#request<GitHubPullRequestReviewCommentAPI[]>(
+        "GET",
+        `/repos/${repositoryPath(repository)}/pulls/${pullRequestNumber}/comments?per_page=100&page=${page}`,
+      );
+      comments.push(...batch.map(normalizeReviewComment));
+      if (batch.length < 100) return comments;
+    }
+  }
+
+  async listOpenPullRequestsByHead(
+    repository: string,
+    branch: string,
+  ): Promise<DraftPullRequest[]> {
+    const owner = repository.split("/")[0]!;
+    const query = new URLSearchParams({
+      state: "open",
+      head: `${owner}:${branch}`,
+      per_page: "100",
+    });
+    const values = await this.#request<GitHubPullRequestAPI[]>(
+      "GET",
+      `/repos/${repositoryPath(repository)}/pulls?${query.toString()}`,
+    );
+    return values.map(normalizePullRequest);
+  }
+
+  async createDraftPullRequest(
+    repository: string,
+    input: { title: string; body: string; head: string; base: string },
+  ): Promise<DraftPullRequest> {
+    const value = await this.#request<GitHubPullRequestAPI>(
+      "POST",
+      `/repos/${repositoryPath(repository)}/pulls`,
+      { ...input, draft: true },
+    );
+    return normalizePullRequest(value);
   }
 
   async addLabels(
@@ -184,24 +216,27 @@ export class GitHubClient implements GitHubIssuesClient {
     repository: string,
     issueNumber: number,
     body: string,
-  ): Promise<GitHubComment> {
-    return this.#request<GitHubComment>(
+  ): Promise<IssueComment> {
+    const comment = await this.#request<GitHubCommentAPI>(
       "POST",
       `/repos/${repositoryPath(repository)}/issues/${issueNumber}/comments`,
       { body },
     );
+    return normalizeComment(comment);
   }
 
   async updateComment(
     repository: string,
+    _issueNumber: number,
     commentID: number,
     body: string,
-  ): Promise<GitHubComment> {
-    return this.#request<GitHubComment>(
+  ): Promise<IssueComment> {
+    const comment = await this.#request<GitHubCommentAPI>(
       "PATCH",
       `/repos/${repositoryPath(repository)}/issues/comments/${commentID}`,
       { body },
     );
+    return normalizeComment(comment);
   }
 
   async #request<T = unknown>(
@@ -210,9 +245,7 @@ export class GitHubClient implements GitHubIssuesClient {
     body?: unknown,
   ): Promise<T> {
     const response = await this.#rawRequest(method, path, body);
-    if (!response.ok) {
-      throw await responseError(method, path, response);
-    }
+    if (!response.ok) throw await responseError(method, path, response);
     return (await response.json()) as T;
   }
 
@@ -222,12 +255,8 @@ export class GitHubClient implements GitHubIssuesClient {
       "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": "engineering-agent-workflows/issue-triage",
     };
-    if (this.#token) {
-      headers.Authorization = `Bearer ${this.#token}`;
-    }
-    if (body !== undefined) {
-      headers["Content-Type"] = "application/json";
-    }
+    if (this.#token) headers.Authorization = `Bearer ${this.#token}`;
+    if (body !== undefined) headers["Content-Type"] = "application/json";
     return this.#fetch(`${this.#baseUrl}${path}`, {
       method,
       headers,
@@ -238,15 +267,106 @@ export class GitHubClient implements GitHubIssuesClient {
 
 function repositoryPath(repository: string): string {
   const parts = repository.split("/");
-  if (parts.length !== 2 || parts.some((part) => part.trim() === "")) {
+  if (parts.length !== 2 || parts.some((part) => !part.trim())) {
     throw new Error(`invalid GitHub repository: ${repository}`);
   }
   return parts.map(encodeURIComponent).join("/");
 }
 
+function normalizeIssue(issue: GitHubIssueAPI): Issue {
+  return {
+    number: issue.number,
+    title: issue.title,
+    body: issue.body,
+    state: issue.state,
+    htmlUrl: issue.html_url,
+    updatedAt: issue.updated_at,
+    labels: labelNames(issue.labels),
+    ...(issue.user ? { user: normalizeUser(issue.user) } : {}),
+  };
+}
+
+function normalizeComment(comment: GitHubCommentAPI): IssueComment {
+  return {
+    id: comment.id,
+    body: comment.body,
+    ...(comment.html_url ? { htmlUrl: comment.html_url } : {}),
+    ...(comment.created_at ? { createdAt: comment.created_at } : {}),
+    ...(comment.user ? { user: normalizeUser(comment.user) } : {}),
+  };
+}
+
+function normalizePullRequest(value: GitHubPullRequestAPI): DraftPullRequest {
+  return {
+    number: value.number,
+    url: value.html_url,
+    state: value.state,
+    draft: value.draft ?? false,
+    head: value.head.ref,
+    ...(value.head.sha ? { headSha: value.head.sha } : {}),
+    ...(value.head.repo?.full_name
+      ? { headRepository: value.head.repo.full_name }
+      : {}),
+    base: value.base.ref,
+  };
+}
+
+function normalizeReviewComment(
+  comment: GitHubPullRequestReviewCommentAPI,
+): PullRequestReviewComment {
+  return {
+    id: comment.id,
+    body: comment.body,
+    path: comment.path,
+    ...(comment.user ? { user: normalizeUser(comment.user) } : {}),
+    ...(comment.html_url ? { htmlUrl: comment.html_url } : {}),
+    ...(comment.created_at ? { createdAt: comment.created_at } : {}),
+    ...(comment.line != null ? { line: comment.line } : {}),
+    ...(comment.original_line != null
+      ? { originalLine: comment.original_line }
+      : {}),
+    ...(comment.start_line != null ? { startLine: comment.start_line } : {}),
+    ...(comment.original_start_line != null
+      ? { originalStartLine: comment.original_start_line }
+      : {}),
+    ...(comment.side ? { side: comment.side } : {}),
+    ...(comment.start_side ? { startSide: comment.start_side } : {}),
+    ...(comment.diff_hunk ? { diffHunk: comment.diff_hunk } : {}),
+    ...(comment.commit_id ? { commitId: comment.commit_id } : {}),
+    ...(comment.original_commit_id
+      ? { originalCommitId: comment.original_commit_id }
+      : {}),
+    ...(comment.in_reply_to_id !== undefined
+      ? { inReplyToId: comment.in_reply_to_id }
+      : {}),
+    ...(comment.pull_request_review_id !== undefined
+      ? { pullRequestReviewId: comment.pull_request_review_id }
+      : {}),
+  };
+}
+
+function normalizeUser(user: { login: string; id?: number; type?: string }) {
+  return {
+    login: user.login,
+    ...(user.id !== undefined ? { id: user.id } : {}),
+    ...(user.type ? { type: user.type } : {}),
+  };
+}
+
+function labelNames(labels: Array<GitHubLabelAPI | string>): string[] {
+  return labels
+    .map((label) => (typeof label === "string" ? label : label.name))
+    .filter((label) => label.trim() !== "");
+}
+
+function normalizeColor(color: string): string {
+  const normalized = color.trim().replace(/^#/, "");
+  return /^[0-9a-f]{6}$/i.test(normalized) ? normalized : "ededed";
+}
+
 function searchText(title: string): string {
   return title
-    .replace(/^\[[^\]]+\]\s*:?[\s]*/, "")
+    .replace(/^\[[^\]]+\]\s*:?\s*/, "")
     .replace(/["'`:+(){}[\]\\]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
