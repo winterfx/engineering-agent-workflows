@@ -143,6 +143,7 @@ function runTool(
         TRIAGE_SUBMISSION: submission ? JSON.stringify(submission) : "",
         TRIAGE_SENDER_LOGIN: senderLogin || "",
         TRIAGE_PROVIDER: provider,
+        ISSUE_TRIAGE_PROVIDER: provider,
       },
       volumes: [
         {
