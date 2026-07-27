@@ -266,6 +266,13 @@ request reviews**, **Pull request review comments**, and **Check suites**. Map t
 `webhook.github.check_suite`. Pull Request payloads delivered on the Issues
 topic are ignored.
 
+GitHub signs webhook deliveries but cannot add the fixed source token required
+by the agent-compose ingress. Run the trusted host-side relay with
+`npm run start:webhook-relay`, point the GitHub webhook at `/github`, and expose
+only that relay listener. It verifies `X-Hub-Signature-256`, restricts payloads
+to `GITHUB_ALLOWED_REPOSITORY`, maps `X-GitHub-Event` to the scheduler topic,
+and adds `AGENT_COMPOSE_WEBHOOK_TOKEN` only on the internal daemon request.
+
 Webhook secrets authenticate inbound deliveries. `GITLAB_TOKEN` and
 `GITHUB_TOKEN` are separate API credentials; never reuse a webhook secret as an
 API token.
@@ -291,6 +298,8 @@ API token.
 | `DRAFT_PR_GIT_AUTHOR_EMAIL`   | Apply mode                       | Deterministic commit author email                                  |
 | `MONKEYSCAN_BOT_LOGIN`        | MonkeyScan review fixes          | Exact GitHub login allowed to trigger review fixes                 |
 | `MONKEYSCAN_BOT_USER_ID`      | No                               | Optional numeric GitHub user ID for stronger identity matching     |
+| `GITHUB_WEBHOOK_SECRET`       | GitHub webhook relay             | GitHub HMAC secret; trusted host only                              |
+| `AGENT_COMPOSE_WEBHOOK_TOKEN` | GitHub webhook relay             | Fixed token configured on the internal daemon source               |
 
 See `.env.example` for defaults. Model/provider credentials remain owned by
 agent-compose and are not stored in this repository.

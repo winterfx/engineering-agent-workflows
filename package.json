@@ -16,6 +16,7 @@
     "format:check": "prettier --check .",
     "start": "tsx src/issue-triage/main.ts",
     "start:draft-pr": "tsx src/draft-pr/main.ts",
+    "start:webhook-relay": "tsx src/github/webhook-relay.ts",
     "test": "vitest run test",
     "test:coverage": "vitest run test --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit"
