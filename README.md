@@ -88,6 +88,76 @@ the diff crosses the existing approval gates. MonkeyScan comments are untrusted
 findings: the Agent must verify each one against code and cannot edit, reply to,
 or resolve scanner review threads.
 
+### End-to-end example
+
+Assume a reporter opens Issue `#439`: “Deletion recovery leaves `LastError`
+set after the recovery has completed.” A normal run looks like this:
+
+```mermaid
+sequenceDiagram
+    actor Human as Reporter / Maintainer
+    participant GitHub
+    participant Triage as Issue Triage Agent
+    participant Draft as Draft PR Agent
+    participant Boundary as Trusted Git / Provider Boundary
+    participant Scan as MonkeyScan
+
+    Human->>GitHub: Open Issue #439
+    GitHub->>Triage: issues.opened
+    Triage->>GitHub: Add bug, priority:P2, triage:done<br/>and managed triage comment
+    Note over Human,GitHub: Required human gate: verify scope and add agent:ready
+    Human->>GitHub: Add agent:ready
+    GitHub->>Boundary: issues.labeled
+    Boundary->>Draft: Fresh checkout in new sandbox
+    Draft-->>Boundary: Uncommitted implementation + tests + JSON result
+    Boundary->>GitHub: Validate, commit, push codex/issue-439,<br/>open Draft PR, add agent:pr-open
+    Scan->>GitHub: Submit multiple inline Review Comments
+    GitHub->>Boundary: review/review_comment webhooks
+    Boundary->>Draft: One fix_review run with all pending findings
+    Draft-->>Boundary: One coherent uncommitted fix + per-comment results
+    Boundary->>GitHub: Validate, create one commit, push same PR branch
+    Note over Human,GitHub: Required human gate: review the Draft PR,<br/>resolve/accept threads, mark ready, and merge
+```
+
+Concretely:
+
+1. **Automatic triage:** the Issue Triage Agent verifies the Issue and proposes
+   `bug`, `priority:P2`, and `triage:done`. Missing managed Labels are created
+   before they are applied. It does not change the Issue title or add
+   `agent:ready`.
+2. **Human starts implementation:** a maintainer reviews the Issue scope and
+   triage result, corrects any human-owned classification if necessary, and
+   adds `agent:ready`. This is the mandatory authorization to modify code.
+3. **Automatic Draft PR:** the Draft PR workflow claims the Issue with
+   `agent:running`, checks out the default branch into an isolated workspace,
+   implements and tests the change, validates the diff, pushes
+   `codex/issue-439`, and opens a Draft PR. The Issue moves to `agent:pr-open`.
+4. **Conditional human approval:** if implementation touches an approval-gated
+   path or reports high risk, no PR is created. The Issue moves to
+   `agent:needs-approval`; a maintainer must inspect the disclosed risk and add
+   `agent:approved` before the Agent may rerun that scope.
+5. **Automatic MonkeyScan batch:** MonkeyScan may publish several Conversation
+   or inline Review Comments. The workflow collects pending MonkeyScan findings
+   up to the configured batch limit (currently 50), sorts them deterministically,
+   and gives them to one `fix_review` run. A valid result produces at most one
+   commit and one push to the existing PR branch. Overflow or a comment that
+   arrives after the batch snapshot is picked up by its webhook or the
+   one-minute reconciliation pass.
+6. **Conditional human scanner intervention:** automatic review fixes stop
+   after three batches, on conflicting findings, on approval-gated risk, or
+   when validation cannot establish a safe fix. A maintainer then decides
+   whether to edit the PR, request another change, or accept the remaining
+   finding. The Agent does not resolve MonkeyScan threads.
+7. **Human finishes the PR:** a maintainer reviews the final diff and checks,
+   resolves or accepts the review conversations, marks the Draft PR ready, and
+   merges it under the repository's normal protection rules. These final PR
+   actions are intentionally outside the Agent workflow.
+
+Human intervention points are therefore: optional correction or `skip-triage`
+during triage; required `agent:ready` before implementation; conditional
+`agent:approved` for gated Issue implementation; conditional manual handling of
+stopped MonkeyScan fixes; and required final PR review, readiness, and merge.
+
 ## Label ownership
 
 The Issue Triage Agent uses the repository's existing type taxonomy:

@@ -46,6 +46,13 @@ export interface GitDraftPrWorkspaceOptions {
   lockTtlMs?: number;
 }
 
+export class DraftPrWorkspaceLockError extends Error {
+  constructor(target: "Issue" | "Pull Request") {
+    super(`another Draft PR run already holds the ${target} lock`);
+    this.name = "DraftPrWorkspaceLockError";
+  }
+}
+
 export class GitDraftPrWorkspace implements DraftPrWorkspace {
   readonly #root: string;
   readonly #token: string;
@@ -327,7 +334,10 @@ export class GitDraftPrWorkspace implements DraftPrWorkspace {
     return resolved;
   }
 
-  async #acquireLock(lockPath: string, target = "Issue"): Promise<void> {
+  async #acquireLock(
+    lockPath: string,
+    target: "Issue" | "Pull Request" = "Issue",
+  ): Promise<void> {
     try {
       await mkdir(lockPath);
       return;
@@ -336,7 +346,7 @@ export class GitDraftPrWorkspace implements DraftPrWorkspace {
     }
     const info = await stat(lockPath);
     if (Date.now() - info.mtimeMs <= this.#lockTtlMs) {
-      throw new Error(`another Draft PR run already holds the ${target} lock`);
+      throw new DraftPrWorkspaceLockError(target);
     }
     await rm(lockPath, { recursive: true, force: true });
     await mkdir(lockPath);

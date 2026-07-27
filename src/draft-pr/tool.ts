@@ -20,9 +20,10 @@ import {
   type DraftPrAnalysis,
   type DraftPrInspection,
 } from "./schema.js";
-import type {
-  DraftPrWorkspace,
-  PreparedDraftPrWorkspace,
+import {
+  DraftPrWorkspaceLockError,
+  type DraftPrWorkspace,
+  type PreparedDraftPrWorkspace,
 } from "./workspace.js";
 
 export type DraftPrTrigger = "ready" | "approved";
@@ -136,6 +137,18 @@ export async function prepareDraftPr(
       );
     }
   } catch (error) {
+    // Lock contention means another run owns both the lock and workspace.
+    if (error instanceof DraftPrWorkspaceLockError) {
+      return {
+        ok: true,
+        skipped: true,
+        reason: error.message,
+        repository,
+        issueNumber,
+        trigger,
+        approved: trigger === "approved",
+      };
+    }
     await dependencies.workspace.cleanup(repository, issueNumber);
     throw error;
   }

@@ -3,6 +3,7 @@ dist/
 coverage/
 .env
 .DS_Store
+.idea/
 *.log
 .draft-pr-workspaces/*
 !.draft-pr-workspaces/.gitkeep

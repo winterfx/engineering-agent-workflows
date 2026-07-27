@@ -21,6 +21,7 @@ import {
 } from "./review-schema.js";
 import type { DraftPrInspection } from "./schema.js";
 import type { DraftPrToolDependencies } from "./tool.js";
+import { DraftPrWorkspaceLockError } from "./workspace.js";
 
 export interface ReviewFixDependencies extends DraftPrToolDependencies {
   provider: DraftPrProvider;
@@ -185,7 +186,7 @@ export async function prepareReviewFix(
       expectedHeadSha: pullRequest.headSha!,
     });
   } catch (error) {
-    if (errorMessage(error).includes("holds the Pull Request lock")) {
+    if (error instanceof DraftPrWorkspaceLockError) {
       return skipped(
         repository,
         pullRequestNumber,

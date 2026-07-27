@@ -14850,7 +14850,7 @@ function hasAnyLabel(labels, expected) {
 }
 
 // src/draft-pr/review-tool.ts
-import crypto from "node:crypto";
+import crypto2 from "node:crypto";
 
 // src/draft-pr/review-comment.ts
 var REVIEW_FIX_COMMENT_PREFIX = "<!-- engineering-agent-workflows:review-fix:v";
@@ -14954,6 +14954,397 @@ var reviewFixSubmissionSchema = external_exports.object({
   analysis: reviewFixAnalysisSchema
 });
 
+// src/draft-pr/workspace.ts
+import crypto from "node:crypto";
+import { spawn } from "node:child_process";
+import { chmod, lstat, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import path from "node:path";
+var DraftPrWorkspaceLockError = class extends Error {
+  constructor(target) {
+    super(`another Draft PR run already holds the ${target} lock`);
+    this.name = "DraftPrWorkspaceLockError";
+  }
+};
+var GitDraftPrWorkspace = class {
+  #root;
+  #token;
+  #authorName;
+  #authorEmail;
+  #lockTtlMs;
+  constructor(options) {
+    this.#root = path.resolve(options.root);
+    this.#token = options.token.trim();
+    this.#authorName = options.authorName.trim();
+    this.#authorEmail = options.authorEmail.trim();
+    this.#lockTtlMs = options.lockTtlMs ?? 4 * 60 * 60 * 1e3;
+    if (!this.#token)
+      throw new Error("GitHub token is required for Git workspace preparation");
+    if (!this.#authorName || !this.#authorEmail) {
+      throw new Error("Git author name and email are required");
+    }
+  }
+  async prepare(input) {
+    validateCloneUrl(input.cloneUrl);
+    validateGitRef(input.baseBranch, "base branch");
+    validateGitRef(input.branch, "working branch");
+    const paths = this.#paths(input.repository, "issue", input.issueNumber);
+    await mkdir(path.dirname(paths.lock), { recursive: true });
+    await this.#acquireLock(paths.lock);
+    try {
+      await rm(paths.workspace, { recursive: true, force: true });
+      await mkdir(path.dirname(paths.workspace), { recursive: true });
+      const env = await this.#authenticatedGitEnvironment();
+      await runGit(
+        [
+          "clone",
+          "--no-tags",
+          "--depth=1",
+          "--branch",
+          input.baseBranch,
+          "--",
+          input.cloneUrl,
+          paths.workspace
+        ],
+        { cwd: this.#root, env }
+      );
+      const existing = await runGit(
+        ["ls-remote", "--heads", "origin", `refs/heads/${input.branch}`],
+        { cwd: paths.workspace, env }
+      );
+      if (existing.stdout.trim()) {
+        throw new Error(`remote branch already exists: ${input.branch}`);
+      }
+      await runGit(["checkout", "-b", input.branch], {
+        cwd: paths.workspace,
+        env
+      });
+      const baseCommit = (await runGit(["rev-parse", "HEAD"], { cwd: paths.workspace, env })).stdout.trim();
+      return {
+        path: paths.workspace,
+        branch: input.branch,
+        baseBranch: input.baseBranch,
+        baseCommit
+      };
+    } catch (error51) {
+      await this.cleanup(input.repository, input.issueNumber);
+      throw error51;
+    }
+  }
+  async prepareReview(input) {
+    validateCloneUrl(input.cloneUrl);
+    validateGitRef(input.baseBranch, "base branch");
+    validateGitRef(input.branch, "Pull Request branch");
+    if (!/^[0-9a-f]{40}$/.test(input.expectedHeadSha)) {
+      throw new Error("invalid expected Pull Request head SHA");
+    }
+    const paths = this.#paths(input.repository, "pr", input.pullRequestNumber);
+    await mkdir(path.dirname(paths.lock), { recursive: true });
+    await this.#acquireLock(paths.lock, "Pull Request");
+    try {
+      await rm(paths.workspace, { recursive: true, force: true });
+      await mkdir(path.dirname(paths.workspace), { recursive: true });
+      const env = await this.#authenticatedGitEnvironment();
+      await runGit(
+        [
+          "clone",
+          "--no-tags",
+          "--depth=1",
+          "--branch",
+          input.branch,
+          "--",
+          input.cloneUrl,
+          paths.workspace
+        ],
+        { cwd: this.#root, env }
+      );
+      const headCommit = (await runGit(["rev-parse", "HEAD"], { cwd: paths.workspace, env })).stdout.trim();
+      if (headCommit !== input.expectedHeadSha) {
+        throw new Error(
+          "Pull Request head changed during workspace preparation"
+        );
+      }
+      return {
+        path: paths.workspace,
+        branch: input.branch,
+        baseBranch: input.baseBranch,
+        baseCommit: headCommit
+      };
+    } catch (error51) {
+      await this.cleanupReview(input.repository, input.pullRequestNumber);
+      throw error51;
+    }
+  }
+  async inspect(workspacePath) {
+    const resolved = this.#assertWorkspacePath(workspacePath);
+    const env = this.#localGitEnvironment();
+    await runGit(["add", "-A"], { cwd: resolved, env });
+    const [head, names, stats, check2, diff] = await Promise.all([
+      runGit(["rev-parse", "HEAD"], { cwd: resolved, env }),
+      runGit(["diff", "--cached", "--name-only", "-z"], {
+        cwd: resolved,
+        env
+      }),
+      runGit(["diff", "--cached", "--numstat"], { cwd: resolved, env }),
+      runGit(["diff", "--cached", "--check"], {
+        cwd: resolved,
+        env,
+        allowFailure: true
+      }),
+      runGit(
+        [
+          "diff",
+          "--cached",
+          "--unified=0",
+          "--no-color",
+          "--no-ext-diff",
+          "--no-textconv"
+        ],
+        {
+          cwd: resolved,
+          env,
+          maxOutputBytes: 8 * 1024 * 1024
+        }
+      )
+    ]);
+    const changedFiles = names.stdout.split("\0").filter(Boolean);
+    let additions = 0;
+    let deletions = 0;
+    for (const line of stats.stdout.split("\n")) {
+      const [added, deleted] = line.split("	");
+      if (/^\d+$/.test(added ?? "")) additions += Number(added);
+      if (/^\d+$/.test(deleted ?? "")) deletions += Number(deleted);
+    }
+    return {
+      headCommit: head.stdout.trim(),
+      changedFiles,
+      additions,
+      deletions,
+      diffCheckPassed: check2.exitCode === 0,
+      secretFindingPaths: scanAddedLinesForSecrets(diff.stdout)
+    };
+  }
+  async commitAndPush(workspacePath, branch, title, cloneUrl) {
+    const resolved = this.#assertWorkspacePath(workspacePath);
+    validateGitRef(branch, "working branch");
+    validateCloneUrl(cloneUrl);
+    await this.#writeTrustedGitConfig(resolved, cloneUrl);
+    const localEnv = this.#localGitEnvironment();
+    await runGit(
+      [
+        "-c",
+        `user.name=${this.#authorName}`,
+        "-c",
+        `user.email=${this.#authorEmail}`,
+        "-c",
+        "core.hooksPath=/dev/null",
+        "commit",
+        "-m",
+        title
+      ],
+      { cwd: resolved, env: localEnv }
+    );
+    const authenticatedEnv = await this.#authenticatedGitEnvironment();
+    await runGit(
+      [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "credential.helper=",
+        "push",
+        "--no-verify",
+        "--set-upstream",
+        "origin",
+        branch
+      ],
+      {
+        cwd: resolved,
+        env: authenticatedEnv
+      }
+    );
+    return (await runGit(["rev-parse", "HEAD"], { cwd: resolved, env: localEnv })).stdout.trim();
+  }
+  async cleanup(repository, issueNumber) {
+    const paths = this.#paths(repository, "issue", issueNumber);
+    await rm(paths.workspace, { recursive: true, force: true });
+    await rm(paths.lock, { recursive: true, force: true });
+  }
+  async cleanupReview(repository, pullRequestNumber) {
+    const paths = this.#paths(repository, "pr", pullRequestNumber);
+    await rm(paths.workspace, { recursive: true, force: true });
+    await rm(paths.lock, { recursive: true, force: true });
+  }
+  #paths(repository, kind, number4) {
+    if (!Number.isSafeInteger(number4) || number4 <= 0) {
+      throw new Error(
+        `${kind === "issue" ? "Issue" : "Pull Request"} number must be a positive integer`
+      );
+    }
+    const key = crypto.createHash("sha256").update(repository.trim().toLowerCase()).digest("hex").slice(0, 16);
+    return {
+      workspace: path.join(
+        this.#root,
+        "repositories",
+        key,
+        `${kind}-${number4}`
+      ),
+      lock: path.join(this.#root, ".locks", `${key}-${kind}-${number4}`)
+    };
+  }
+  #assertWorkspacePath(value) {
+    const resolved = path.resolve(value);
+    const expectedPrefix = `${path.join(this.#root, "repositories")}${path.sep}`;
+    if (!resolved.startsWith(expectedPrefix)) {
+      throw new Error("workspace path is outside the configured Draft PR root");
+    }
+    return resolved;
+  }
+  async #acquireLock(lockPath, target = "Issue") {
+    try {
+      await mkdir(lockPath);
+      return;
+    } catch (error51) {
+      if (!isAlreadyExists(error51)) throw error51;
+    }
+    const info = await stat(lockPath);
+    if (Date.now() - info.mtimeMs <= this.#lockTtlMs) {
+      throw new DraftPrWorkspaceLockError(target);
+    }
+    await rm(lockPath, { recursive: true, force: true });
+    await mkdir(lockPath);
+  }
+  #localGitEnvironment() {
+    return {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      LANG: process.env.LANG ?? "C.UTF-8",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_TERMINAL_PROMPT: "0"
+    };
+  }
+  async #authenticatedGitEnvironment() {
+    await mkdir(this.#root, { recursive: true });
+    const askPass = path.join(this.#root, ".git-askpass.sh");
+    await writeFile(
+      askPass,
+      [
+        "#!/bin/sh",
+        'case "$1" in',
+        '  *Username*) printf "%s" "x-access-token" ;;',
+        '  *) printf "%s" "$DRAFT_PR_GIT_TOKEN" ;;',
+        "esac",
+        ""
+      ].join("\n"),
+      { mode: 448 }
+    );
+    await chmod(askPass, 448);
+    return {
+      ...this.#localGitEnvironment(),
+      GIT_ASKPASS: askPass,
+      DRAFT_PR_GIT_TOKEN: this.#token
+    };
+  }
+  async #writeTrustedGitConfig(workspacePath, cloneUrl) {
+    const gitDirectory = path.join(workspacePath, ".git");
+    const gitDirectoryInfo = await lstat(gitDirectory);
+    if (!gitDirectoryInfo.isDirectory() || gitDirectoryInfo.isSymbolicLink()) {
+      throw new Error("prepared workspace .git directory was replaced");
+    }
+    const configPath = path.join(gitDirectory, "config");
+    const configInfo = await lstat(configPath);
+    if (!configInfo.isFile() || configInfo.isSymbolicLink()) {
+      throw new Error("prepared workspace Git config was replaced");
+    }
+    await writeFile(
+      configPath,
+      [
+        "[core]",
+        "	repositoryformatversion = 0",
+        "	filemode = true",
+        "	bare = false",
+        "	logallrefupdates = true",
+        "	hooksPath = /dev/null",
+        '[remote "origin"]',
+        `	url = ${cloneUrl}`,
+        "	fetch = +refs/heads/*:refs/remotes/origin/*",
+        ""
+      ].join("\n"),
+      { mode: 384 }
+    );
+  }
+};
+async function runGit(args, options) {
+  const safeArgs = options.cwd ? ["-c", `safe.directory=${options.cwd}`, ...args] : args;
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", safeArgs, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const max = options.maxOutputBytes ?? 2 * 1024 * 1024;
+    let stdout = "";
+    let stderr = "";
+    let size = 0;
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      size += Buffer.byteLength(chunk);
+      if (size <= max) stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      size += Buffer.byteLength(chunk);
+      if (size <= max) stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      const exitCode = code ?? 1;
+      if (size > max) {
+        reject(new Error("git command output exceeded the configured limit"));
+      } else if (exitCode !== 0 && !options.allowFailure) {
+        reject(
+          new Error(
+            `git ${args[0] ?? "command"} failed: ${stderr.trim().slice(-2e3)}`
+          )
+        );
+      } else {
+        resolve({ stdout, stderr, exitCode });
+      }
+    });
+  });
+}
+function validateCloneUrl(value) {
+  const url2 = new URL(value);
+  if (url2.protocol !== "https:" || url2.username || url2.password) {
+    throw new Error("Draft PR clone URL must be credential-free HTTPS");
+  }
+}
+function validateGitRef(value, name) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value) || value.includes("..") || value.includes("//") || value.endsWith("/") || value.endsWith(".lock")) {
+    throw new Error(`invalid ${name}: ${value}`);
+  }
+}
+function scanAddedLinesForSecrets(diff) {
+  const findings = /* @__PURE__ */ new Set();
+  let currentPath = "unknown";
+  const patterns = [
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+    /\bghp_[A-Za-z0-9]{30,}\b/,
+    /\bgithub_pat_[A-Za-z0-9_]{30,}\b/,
+    /\bAKIA[0-9A-Z]{16}\b/,
+    /Authorization:\s*Bearer\s+[A-Za-z0-9._-]{20,}/i
+  ];
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++ b/")) currentPath = line.slice(6);
+    if (!line.startsWith("+") || line.startsWith("+++")) continue;
+    if (patterns.some((pattern) => pattern.test(line)))
+      findings.add(currentPath);
+  }
+  return [...findings].sort();
+}
+function isAlreadyExists(error51) {
+  return typeof error51 === "object" && error51 !== null && "code" in error51 && error51.code === "EEXIST";
+}
+
 // src/draft-pr/review-tool.ts
 async function listReviewFixTargets(repository, dependencies) {
   assertAllowedRepository(repository, dependencies.allowedRepository);
@@ -15040,7 +15431,7 @@ async function prepareReviewFix(repository, pullRequestNumber, dependencies) {
       expectedHeadSha: pullRequest.headSha
     });
   } catch (error51) {
-    if (errorMessage(error51).includes("holds the Pull Request lock")) {
+    if (error51 instanceof DraftPrWorkspaceLockError) {
       return skipped(
         repository,
         pullRequestNumber,
@@ -15379,7 +15770,7 @@ function reviewState(comments, dependencies) {
   return parseReviewFixState(findReviewFixComment(comments, botLogin));
 }
 function fingerprintComments(comments) {
-  return crypto.createHash("sha256").update(
+  return crypto2.createHash("sha256").update(
     JSON.stringify(
       comments.map(({ source, comment }) => ({
         source,
@@ -15469,9 +15860,6 @@ function assertAllowedRepository(repository, allowed) {
     throw new Error("repository is outside the Draft PR allowlist");
   }
 }
-function errorMessage(error51) {
-  return error51 instanceof Error ? error51.message : String(error51);
-}
 function truncate2(value, max) {
   return value.length <= max ? value : value.slice(0, max);
 }
@@ -15527,10 +15915,10 @@ function assertBoundDraftPrTarget(repository, issueNumber, apply, environment) {
 }
 
 // src/issue-triage/comment.ts
-import crypto2 from "node:crypto";
+import crypto3 from "node:crypto";
 var COMMENT_MARKER_PREFIX = "<!-- engineering-agent-workflows:issue-triage:v1";
 function issueFingerprint(issue2, comments = []) {
-  return crypto2.createHash("sha256").update(
+  return crypto3.createHash("sha256").update(
     JSON.stringify({
       title: issue2.title.trim(),
       body: issue2.body ?? "",
@@ -15670,6 +16058,17 @@ async function prepareDraftPr(repository, issueNumber, trigger, dependencies) {
       );
     }
   } catch (error51) {
+    if (error51 instanceof DraftPrWorkspaceLockError) {
+      return {
+        ok: true,
+        skipped: true,
+        reason: error51.message,
+        repository,
+        issueNumber,
+        trigger,
+        approved: trigger === "approved"
+      };
+    }
     await dependencies.workspace.cleanup(repository, issueNumber);
     throw error51;
   }
@@ -16068,391 +16467,6 @@ function truncate3(value, max) {
   return value.length <= max ? value : value.slice(0, max);
 }
 
-// src/draft-pr/workspace.ts
-import crypto3 from "node:crypto";
-import { spawn } from "node:child_process";
-import { chmod, lstat, mkdir, rm, stat, writeFile } from "node:fs/promises";
-import path from "node:path";
-var GitDraftPrWorkspace = class {
-  #root;
-  #token;
-  #authorName;
-  #authorEmail;
-  #lockTtlMs;
-  constructor(options) {
-    this.#root = path.resolve(options.root);
-    this.#token = options.token.trim();
-    this.#authorName = options.authorName.trim();
-    this.#authorEmail = options.authorEmail.trim();
-    this.#lockTtlMs = options.lockTtlMs ?? 4 * 60 * 60 * 1e3;
-    if (!this.#token)
-      throw new Error("GitHub token is required for Git workspace preparation");
-    if (!this.#authorName || !this.#authorEmail) {
-      throw new Error("Git author name and email are required");
-    }
-  }
-  async prepare(input) {
-    validateCloneUrl(input.cloneUrl);
-    validateGitRef(input.baseBranch, "base branch");
-    validateGitRef(input.branch, "working branch");
-    const paths = this.#paths(input.repository, "issue", input.issueNumber);
-    await mkdir(path.dirname(paths.lock), { recursive: true });
-    await this.#acquireLock(paths.lock);
-    try {
-      await rm(paths.workspace, { recursive: true, force: true });
-      await mkdir(path.dirname(paths.workspace), { recursive: true });
-      const env = await this.#authenticatedGitEnvironment();
-      await runGit(
-        [
-          "clone",
-          "--no-tags",
-          "--depth=1",
-          "--branch",
-          input.baseBranch,
-          "--",
-          input.cloneUrl,
-          paths.workspace
-        ],
-        { cwd: this.#root, env }
-      );
-      const existing = await runGit(
-        ["ls-remote", "--heads", "origin", `refs/heads/${input.branch}`],
-        { cwd: paths.workspace, env }
-      );
-      if (existing.stdout.trim()) {
-        throw new Error(`remote branch already exists: ${input.branch}`);
-      }
-      await runGit(["checkout", "-b", input.branch], {
-        cwd: paths.workspace,
-        env
-      });
-      const baseCommit = (await runGit(["rev-parse", "HEAD"], { cwd: paths.workspace, env })).stdout.trim();
-      return {
-        path: paths.workspace,
-        branch: input.branch,
-        baseBranch: input.baseBranch,
-        baseCommit
-      };
-    } catch (error51) {
-      await this.cleanup(input.repository, input.issueNumber);
-      throw error51;
-    }
-  }
-  async prepareReview(input) {
-    validateCloneUrl(input.cloneUrl);
-    validateGitRef(input.baseBranch, "base branch");
-    validateGitRef(input.branch, "Pull Request branch");
-    if (!/^[0-9a-f]{40}$/.test(input.expectedHeadSha)) {
-      throw new Error("invalid expected Pull Request head SHA");
-    }
-    const paths = this.#paths(input.repository, "pr", input.pullRequestNumber);
-    await mkdir(path.dirname(paths.lock), { recursive: true });
-    await this.#acquireLock(paths.lock, "Pull Request");
-    try {
-      await rm(paths.workspace, { recursive: true, force: true });
-      await mkdir(path.dirname(paths.workspace), { recursive: true });
-      const env = await this.#authenticatedGitEnvironment();
-      await runGit(
-        [
-          "clone",
-          "--no-tags",
-          "--depth=1",
-          "--branch",
-          input.branch,
-          "--",
-          input.cloneUrl,
-          paths.workspace
-        ],
-        { cwd: this.#root, env }
-      );
-      const headCommit = (await runGit(["rev-parse", "HEAD"], { cwd: paths.workspace, env })).stdout.trim();
-      if (headCommit !== input.expectedHeadSha) {
-        throw new Error(
-          "Pull Request head changed during workspace preparation"
-        );
-      }
-      return {
-        path: paths.workspace,
-        branch: input.branch,
-        baseBranch: input.baseBranch,
-        baseCommit: headCommit
-      };
-    } catch (error51) {
-      await this.cleanupReview(input.repository, input.pullRequestNumber);
-      throw error51;
-    }
-  }
-  async inspect(workspacePath) {
-    const resolved = this.#assertWorkspacePath(workspacePath);
-    const env = this.#localGitEnvironment();
-    await runGit(["add", "-A"], { cwd: resolved, env });
-    const [head, names, stats, check2, diff] = await Promise.all([
-      runGit(["rev-parse", "HEAD"], { cwd: resolved, env }),
-      runGit(["diff", "--cached", "--name-only", "-z"], {
-        cwd: resolved,
-        env
-      }),
-      runGit(["diff", "--cached", "--numstat"], { cwd: resolved, env }),
-      runGit(["diff", "--cached", "--check"], {
-        cwd: resolved,
-        env,
-        allowFailure: true
-      }),
-      runGit(
-        [
-          "diff",
-          "--cached",
-          "--unified=0",
-          "--no-color",
-          "--no-ext-diff",
-          "--no-textconv"
-        ],
-        {
-          cwd: resolved,
-          env,
-          maxOutputBytes: 8 * 1024 * 1024
-        }
-      )
-    ]);
-    const changedFiles = names.stdout.split("\0").filter(Boolean);
-    let additions = 0;
-    let deletions = 0;
-    for (const line of stats.stdout.split("\n")) {
-      const [added, deleted] = line.split("	");
-      if (/^\d+$/.test(added ?? "")) additions += Number(added);
-      if (/^\d+$/.test(deleted ?? "")) deletions += Number(deleted);
-    }
-    return {
-      headCommit: head.stdout.trim(),
-      changedFiles,
-      additions,
-      deletions,
-      diffCheckPassed: check2.exitCode === 0,
-      secretFindingPaths: scanAddedLinesForSecrets(diff.stdout)
-    };
-  }
-  async commitAndPush(workspacePath, branch, title, cloneUrl) {
-    const resolved = this.#assertWorkspacePath(workspacePath);
-    validateGitRef(branch, "working branch");
-    validateCloneUrl(cloneUrl);
-    await this.#writeTrustedGitConfig(resolved, cloneUrl);
-    const localEnv = this.#localGitEnvironment();
-    await runGit(
-      [
-        "-c",
-        `user.name=${this.#authorName}`,
-        "-c",
-        `user.email=${this.#authorEmail}`,
-        "-c",
-        "core.hooksPath=/dev/null",
-        "commit",
-        "-m",
-        title
-      ],
-      { cwd: resolved, env: localEnv }
-    );
-    const authenticatedEnv = await this.#authenticatedGitEnvironment();
-    await runGit(
-      [
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "credential.helper=",
-        "push",
-        "--no-verify",
-        "--set-upstream",
-        "origin",
-        branch
-      ],
-      {
-        cwd: resolved,
-        env: authenticatedEnv
-      }
-    );
-    return (await runGit(["rev-parse", "HEAD"], { cwd: resolved, env: localEnv })).stdout.trim();
-  }
-  async cleanup(repository, issueNumber) {
-    const paths = this.#paths(repository, "issue", issueNumber);
-    await rm(paths.workspace, { recursive: true, force: true });
-    await rm(paths.lock, { recursive: true, force: true });
-  }
-  async cleanupReview(repository, pullRequestNumber) {
-    const paths = this.#paths(repository, "pr", pullRequestNumber);
-    await rm(paths.workspace, { recursive: true, force: true });
-    await rm(paths.lock, { recursive: true, force: true });
-  }
-  #paths(repository, kind, number4) {
-    if (!Number.isSafeInteger(number4) || number4 <= 0) {
-      throw new Error(
-        `${kind === "issue" ? "Issue" : "Pull Request"} number must be a positive integer`
-      );
-    }
-    const key = crypto3.createHash("sha256").update(repository.trim().toLowerCase()).digest("hex").slice(0, 16);
-    return {
-      workspace: path.join(
-        this.#root,
-        "repositories",
-        key,
-        `${kind}-${number4}`
-      ),
-      lock: path.join(this.#root, ".locks", `${key}-${kind}-${number4}`)
-    };
-  }
-  #assertWorkspacePath(value) {
-    const resolved = path.resolve(value);
-    const expectedPrefix = `${path.join(this.#root, "repositories")}${path.sep}`;
-    if (!resolved.startsWith(expectedPrefix)) {
-      throw new Error("workspace path is outside the configured Draft PR root");
-    }
-    return resolved;
-  }
-  async #acquireLock(lockPath, target = "Issue") {
-    try {
-      await mkdir(lockPath);
-      return;
-    } catch (error51) {
-      if (!isAlreadyExists(error51)) throw error51;
-    }
-    const info = await stat(lockPath);
-    if (Date.now() - info.mtimeMs <= this.#lockTtlMs) {
-      throw new Error(`another Draft PR run already holds the ${target} lock`);
-    }
-    await rm(lockPath, { recursive: true, force: true });
-    await mkdir(lockPath);
-  }
-  #localGitEnvironment() {
-    return {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      LANG: process.env.LANG ?? "C.UTF-8",
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_TERMINAL_PROMPT: "0"
-    };
-  }
-  async #authenticatedGitEnvironment() {
-    await mkdir(this.#root, { recursive: true });
-    const askPass = path.join(this.#root, ".git-askpass.sh");
-    await writeFile(
-      askPass,
-      [
-        "#!/bin/sh",
-        'case "$1" in',
-        '  *Username*) printf "%s" "x-access-token" ;;',
-        '  *) printf "%s" "$DRAFT_PR_GIT_TOKEN" ;;',
-        "esac",
-        ""
-      ].join("\n"),
-      { mode: 448 }
-    );
-    await chmod(askPass, 448);
-    return {
-      ...this.#localGitEnvironment(),
-      GIT_ASKPASS: askPass,
-      DRAFT_PR_GIT_TOKEN: this.#token
-    };
-  }
-  async #writeTrustedGitConfig(workspacePath, cloneUrl) {
-    const gitDirectory = path.join(workspacePath, ".git");
-    const gitDirectoryInfo = await lstat(gitDirectory);
-    if (!gitDirectoryInfo.isDirectory() || gitDirectoryInfo.isSymbolicLink()) {
-      throw new Error("prepared workspace .git directory was replaced");
-    }
-    const configPath = path.join(gitDirectory, "config");
-    const configInfo = await lstat(configPath);
-    if (!configInfo.isFile() || configInfo.isSymbolicLink()) {
-      throw new Error("prepared workspace Git config was replaced");
-    }
-    await writeFile(
-      configPath,
-      [
-        "[core]",
-        "	repositoryformatversion = 0",
-        "	filemode = true",
-        "	bare = false",
-        "	logallrefupdates = true",
-        "	hooksPath = /dev/null",
-        '[remote "origin"]',
-        `	url = ${cloneUrl}`,
-        "	fetch = +refs/heads/*:refs/remotes/origin/*",
-        ""
-      ].join("\n"),
-      { mode: 384 }
-    );
-  }
-};
-async function runGit(args, options) {
-  const safeArgs = options.cwd ? ["-c", `safe.directory=${options.cwd}`, ...args] : args;
-  return new Promise((resolve, reject) => {
-    const child = spawn("git", safeArgs, {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    const max = options.maxOutputBytes ?? 2 * 1024 * 1024;
-    let stdout = "";
-    let stderr = "";
-    let size = 0;
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      size += Buffer.byteLength(chunk);
-      if (size <= max) stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      size += Buffer.byteLength(chunk);
-      if (size <= max) stderr += chunk;
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      const exitCode = code ?? 1;
-      if (size > max) {
-        reject(new Error("git command output exceeded the configured limit"));
-      } else if (exitCode !== 0 && !options.allowFailure) {
-        reject(
-          new Error(
-            `git ${args[0] ?? "command"} failed: ${stderr.trim().slice(-2e3)}`
-          )
-        );
-      } else {
-        resolve({ stdout, stderr, exitCode });
-      }
-    });
-  });
-}
-function validateCloneUrl(value) {
-  const url2 = new URL(value);
-  if (url2.protocol !== "https:" || url2.username || url2.password) {
-    throw new Error("Draft PR clone URL must be credential-free HTTPS");
-  }
-}
-function validateGitRef(value, name) {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value) || value.includes("..") || value.includes("//") || value.endsWith("/") || value.endsWith(".lock")) {
-    throw new Error(`invalid ${name}: ${value}`);
-  }
-}
-function scanAddedLinesForSecrets(diff) {
-  const findings = /* @__PURE__ */ new Set();
-  let currentPath = "unknown";
-  const patterns = [
-    /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
-    /\bghp_[A-Za-z0-9]{30,}\b/,
-    /\bgithub_pat_[A-Za-z0-9_]{30,}\b/,
-    /\bAKIA[0-9A-Z]{16}\b/,
-    /Authorization:\s*Bearer\s+[A-Za-z0-9._-]{20,}/i
-  ];
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("+++ b/")) currentPath = line.slice(6);
-    if (!line.startsWith("+") || line.startsWith("+++")) continue;
-    if (patterns.some((pattern) => pattern.test(line)))
-      findings.add(currentPath);
-  }
-  return [...findings].sort();
-}
-function isAlreadyExists(error51) {
-  return typeof error51 === "object" && error51 !== null && "code" in error51 && error51.code === "EEXIST";
-}
-
 // src/draft-pr/main.ts
 async function main() {
   const options = parseArguments(process.argv.slice(2));
@@ -16550,7 +16564,7 @@ async function loadPolicy() {
       lastError = error51;
     }
   }
-  throw new Error(`failed to load Draft PR policy: ${errorMessage2(lastError)}`);
+  throw new Error(`failed to load Draft PR policy: ${errorMessage(lastError)}`);
 }
 function parseArguments(args) {
   const command = args.shift();
@@ -16638,11 +16652,11 @@ function requiredArgumentValue(args, index, name) {
 function envBoolean(value) {
   return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
 }
-function errorMessage2(error51) {
+function errorMessage(error51) {
   return error51 instanceof Error ? error51.message : String(error51);
 }
 main().catch((error51) => {
-  process.stderr.write(`draft-pr failed: ${errorMessage2(error51)}
+  process.stderr.write(`draft-pr failed: ${errorMessage(error51)}
 `);
   process.exitCode = 1;
 });

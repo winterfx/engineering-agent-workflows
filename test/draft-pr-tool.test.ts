@@ -9,9 +9,10 @@ import type {
   DraftPrInspection,
 } from "../src/draft-pr/schema.js";
 import { applyDraftPr, prepareDraftPr } from "../src/draft-pr/tool.js";
-import type {
-  DraftPrWorkspace,
-  PreparedDraftPrWorkspace,
+import {
+  DraftPrWorkspaceLockError,
+  type DraftPrWorkspace,
+  type PreparedDraftPrWorkspace,
 } from "../src/draft-pr/workspace.js";
 import type {
   Issue,
@@ -170,6 +171,7 @@ class FakeWorkspace implements DraftPrWorkspace {
   inspectCalls = 0;
   commitCalls = 0;
   cleanupCalls = 0;
+  prepareError?: Error;
   inspection: DraftPrInspection = {
     headCommit: "a".repeat(40),
     changedFiles: ["pkg/webhooks/store.go", "pkg/webhooks/store_test.go"],
@@ -184,6 +186,7 @@ class FakeWorkspace implements DraftPrWorkspace {
     baseBranch: string;
   }): Promise<PreparedDraftPrWorkspace> {
     this.prepareCalls += 1;
+    if (this.prepareError) throw this.prepareError;
     return {
       path: "/draft-pr-workspaces/repositories/repo/issue-439",
       branch: input.branch,
@@ -247,6 +250,26 @@ function submission(prepared: Awaited<ReturnType<typeof prepareDraftPr>>) {
 }
 
 describe("Draft PR tool", () => {
+  it("does not clean another run's workspace when the Issue lock is held", async () => {
+    const provider = new FakeProvider();
+    const workspace = new FakeWorkspace();
+    workspace.prepareError = new DraftPrWorkspaceLockError("Issue");
+
+    const result = await prepareDraftPr(
+      repository,
+      issue.number,
+      "ready",
+      dependencies(provider, workspace),
+    );
+
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toBe(
+      "another Draft PR run already holds the Issue lock",
+    );
+    expect(workspace.prepareCalls).toBe(1);
+    expect(workspace.cleanupCalls).toBe(0);
+  });
+
   it("skips Issues carrying skip-triage before preparing a workspace", async () => {
     const provider = new FakeProvider();
     const workspace = new FakeWorkspace();
