@@ -1,4 +1,3 @@
-import type { IssuesClient } from "../issues/client.js";
 import type { Issue, IssueCandidate, IssueComment } from "../issues/types.js";
 import { issueSearchText } from "../issues/search.js";
 import type {
@@ -7,6 +6,8 @@ import type {
 } from "../pull-requests/types.js";
 import { truncateText } from "../runtime/text.js";
 import type {
+  GitHubCheckRunAnnotationAPI,
+  GitHubCheckRunAPI,
   GitHubCommentAPI,
   GitHubIssueAPI,
   GitHubLabelAPI,
@@ -14,6 +15,11 @@ import type {
   GitHubPullRequestReviewCommentAPI,
   GitHubRepositoryAPI,
 } from "./types.js";
+import type {
+  CheckRun,
+  CheckRunAnnotation,
+  CiFixProvider,
+} from "../draft-pr/provider.js";
 
 export interface GitHubClientOptions {
   token?: string;
@@ -21,7 +27,7 @@ export interface GitHubClientOptions {
   fetch?: typeof fetch;
 }
 
-export class GitHubClient implements IssuesClient {
+export class GitHubClient implements CiFixProvider {
   readonly #token: string;
   readonly #baseUrl: string;
   readonly #fetch: typeof fetch;
@@ -157,6 +163,42 @@ export class GitHubClient implements IssuesClient {
       );
       comments.push(...batch.map(normalizeReviewComment));
       if (batch.length < 100) return comments;
+    }
+  }
+
+  async listCheckRuns(repository: string, ref: string): Promise<CheckRun[]> {
+    if (!/^[0-9a-f]{40}$/.test(ref)) {
+      throw new Error("invalid GitHub check run ref");
+    }
+    const runs: CheckRun[] = [];
+    for (let page = 1; ; page += 1) {
+      const value = await this.#request<{
+        check_runs?: GitHubCheckRunAPI[];
+      }>(
+        "GET",
+        `/repos/${repositoryPath(repository)}/commits/${ref}/check-runs?per_page=100&page=${page}`,
+      );
+      const batch = value.check_runs ?? [];
+      runs.push(...batch.map(normalizeCheckRun));
+      if (batch.length < 100) return runs;
+    }
+  }
+
+  async listCheckRunAnnotations(
+    repository: string,
+    checkRunId: number,
+  ): Promise<CheckRunAnnotation[]> {
+    if (!Number.isSafeInteger(checkRunId) || checkRunId <= 0) {
+      throw new Error("invalid GitHub check run ID");
+    }
+    const annotations: CheckRunAnnotation[] = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.#request<GitHubCheckRunAnnotationAPI[]>(
+        "GET",
+        `/repos/${repositoryPath(repository)}/check-runs/${checkRunId}/annotations?per_page=100&page=${page}`,
+      );
+      annotations.push(...batch.map(normalizeCheckRunAnnotation));
+      if (batch.length < 100) return annotations;
     }
   }
 
@@ -343,6 +385,42 @@ function normalizeReviewComment(
       : {}),
     ...(comment.pull_request_review_id !== undefined
       ? { pullRequestReviewId: comment.pull_request_review_id }
+      : {}),
+  };
+}
+
+function normalizeCheckRun(value: GitHubCheckRunAPI): CheckRun {
+  const checkSuiteId = value.check_suite?.id;
+  if (!Number.isSafeInteger(checkSuiteId) || checkSuiteId! <= 0) {
+    throw new Error(`GitHub check run ${value.id} has no valid check suite ID`);
+  }
+  return {
+    id: value.id,
+    checkSuiteId: checkSuiteId!,
+    name: truncateText(value.name ?? "", 300),
+    status: value.status,
+    ...(value.conclusion ? { conclusion: value.conclusion } : {}),
+    ...(value.html_url ? { htmlUrl: value.html_url } : {}),
+    output: {
+      title: truncateText(value.output?.title ?? "", 1000),
+      summary: truncateText(value.output?.summary ?? "", 8000),
+      text: truncateText(value.output?.text ?? "", 8000),
+    },
+  };
+}
+
+function normalizeCheckRunAnnotation(
+  value: GitHubCheckRunAnnotationAPI,
+): CheckRunAnnotation {
+  return {
+    path: truncateText(value.path ?? "", 1000),
+    startLine: value.start_line,
+    endLine: value.end_line,
+    level: truncateText(value.annotation_level ?? "", 50),
+    message: truncateText(value.message ?? "", 2000),
+    ...(value.title ? { title: truncateText(value.title, 500) } : {}),
+    ...(value.raw_details
+      ? { rawDetails: truncateText(value.raw_details, 4000) }
       : {}),
   };
 }

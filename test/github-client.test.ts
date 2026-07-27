@@ -337,6 +337,79 @@ describe("GitHubClient", () => {
       "https://github.test/api/repos/chaitin/agent-compose/pulls/440/comments?per_page=100&page=1",
     );
   });
+
+  it("lists failed check runs and annotations for a trusted commit SHA", async () => {
+    const requests: RecordedRequest[] = [];
+    const headSha = "a".repeat(40);
+    const client = new GitHubClient({
+      baseUrl: "https://github.test/api",
+      fetch: recordingFetch(requests, (request) =>
+        request.url.includes("/annotations")
+          ? jsonResponse([
+              {
+                path: "pkg/webhooks/store.go",
+                start_line: 42,
+                end_line: 42,
+                annotation_level: "failure",
+                title: "Uncovered branch",
+                message: "The committed error path is not covered.",
+                raw_details: "coverage: 79.8%",
+              },
+            ])
+          : jsonResponse({
+              total_count: 1,
+              check_runs: [
+                {
+                  id: 701,
+                  name: "CI / Coverage gate",
+                  status: "completed",
+                  conclusion: "failure",
+                  html_url: "https://github.test/checks/701",
+                  check_suite: { id: 88001 },
+                  output: {
+                    title: "Coverage threshold not met",
+                    summary: "Total coverage is below 80%.",
+                    text: "Inspect the uncovered error branch.",
+                  },
+                },
+              ],
+            }),
+      ),
+    });
+
+    const runs = await client.listCheckRuns("chaitin/agent-compose", headSha);
+    const annotations = await client.listCheckRunAnnotations(
+      "chaitin/agent-compose",
+      701,
+    );
+
+    expect(runs).toEqual([
+      expect.objectContaining({
+        id: 701,
+        checkSuiteId: 88001,
+        name: "CI / Coverage gate",
+        conclusion: "failure",
+        output: expect.objectContaining({
+          title: "Coverage threshold not met",
+        }),
+      }),
+    ]);
+    expect(annotations).toEqual([
+      {
+        path: "pkg/webhooks/store.go",
+        startLine: 42,
+        endLine: 42,
+        level: "failure",
+        title: "Uncovered branch",
+        message: "The committed error path is not covered.",
+        rawDetails: "coverage: 79.8%",
+      },
+    ]);
+    expect(requests.map((request) => request.url)).toEqual([
+      `https://github.test/api/repos/chaitin/agent-compose/commits/${headSha}/check-runs?per_page=100&page=1`,
+      "https://github.test/api/repos/chaitin/agent-compose/check-runs/701/annotations?per_page=100&page=1",
+    ]);
+  });
 });
 
 function recordingFetch(

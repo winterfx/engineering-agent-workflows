@@ -633,6 +633,160 @@ describe("Draft PR Scheduler script", () => {
       results: [{ ok: true, applied: true, outcome: "fixed" }],
     });
   });
+
+  it("routes a completed failed check suite through CI prepare and apply", async () => {
+    const handlers = new Map<string, (event: unknown) => unknown>();
+    const commands: string[] = [];
+    let agentPrompt = "";
+    let agentOptions: Record<string, unknown> = {};
+    const headSha = "a".repeat(40);
+    const context = vm.createContext({
+      process: { env: {} },
+      scheduler: {
+        on(
+          topic: string,
+          _triggerID: string,
+          handler: (event: unknown) => unknown,
+        ) {
+          handlers.set(topic, handler);
+        },
+        interval() {},
+        shell(_script: string, options: { env: Record<string, string> }) {
+          const command = options.env.DRAFT_PR_COMMAND ?? "";
+          commands.push(command);
+          const result =
+            command === "prepare-ci"
+              ? {
+                  ok: true,
+                  repository: "chaitin/agent-compose",
+                  pullRequestNumber: 440,
+                  checkSuiteId: 88001,
+                  workspacePath:
+                    "/draft-pr-workspaces/repositories/0123456789abcdef/pr-440",
+                  branch: "codex/issue-439",
+                  baseBranch: "main",
+                  expectedHeadSha: headSha,
+                  failuresFingerprint: "b".repeat(20),
+                  previousAttempts: 0,
+                  failures: [
+                    {
+                      checkRunId: 701,
+                      name: "CI / Coverage gate",
+                      conclusion: "failure",
+                      output: {
+                        title: "Coverage threshold not met",
+                        summary: "79.8% is below 80%.",
+                        text: "",
+                      },
+                      annotations: [],
+                    },
+                  ],
+                }
+              : { ok: true, applied: true, outcome: "fixed" };
+          return { success: true, stdout: JSON.stringify(result) };
+        },
+        agent(prompt: string, options: Record<string, unknown>) {
+          agentPrompt = prompt;
+          agentOptions = options;
+          return {
+            success: true,
+            finalText: JSON.stringify({
+              outcome: "fixed",
+              commitTitle: "test: cover the missed branch",
+              summary: ["Add focused coverage."],
+              failures: [
+                {
+                  checkRunId: 701,
+                  disposition: "fixed",
+                  reason: "Focused test passes locally.",
+                },
+              ],
+              tests: [],
+              risk: { level: "low", reasons: [] },
+              notes: [],
+            }),
+          };
+        },
+      },
+    });
+    new vm.Script(await schedulerScript()).runInContext(context);
+
+    const result = handlers.get("webhook.github.check_suite")?.({
+      payload: {
+        body: {
+          action: "completed",
+          check_suite: {
+            id: 88001,
+            head_sha: headSha,
+            conclusion: "failure",
+            pull_requests: [{ number: 440 }],
+          },
+          repository: { full_name: "chaitin/agent-compose" },
+        },
+      },
+    });
+
+    expect(commands).toEqual(["prepare-ci", "apply-ci"]);
+    expect(result).toEqual({
+      ok: true,
+      repository: "chaitin/agent-compose",
+      checkSuiteId: 88001,
+      results: [{ ok: true, applied: true, outcome: "fixed" }],
+    });
+    expect(agentPrompt).toContain("fix_ci mode");
+    expect(agentPrompt).toContain("CI / Coverage gate");
+    expect(agentOptions.sandboxEnv).toEqual(
+      expect.objectContaining({ GITHUB_TOKEN: "", GH_TOKEN: "" }),
+    );
+  });
+
+  it("ignores successful check suites without invoking a sandbox", async () => {
+    const handlers = new Map<string, (event: unknown) => unknown>();
+    let calls = 0;
+    const context = vm.createContext({
+      scheduler: {
+        on(
+          topic: string,
+          _triggerID: string,
+          handler: (event: unknown) => unknown,
+        ) {
+          handlers.set(topic, handler);
+        },
+        interval() {},
+        shell() {
+          calls += 1;
+          return { success: true, stdout: "{}" };
+        },
+        agent() {
+          calls += 1;
+          return { success: true, finalText: "{}" };
+        },
+      },
+    });
+    new vm.Script(await schedulerScript()).runInContext(context);
+
+    const result = handlers.get("webhook.github.check_suite")?.({
+      payload: {
+        body: {
+          action: "completed",
+          check_suite: {
+            id: 88001,
+            head_sha: "a".repeat(40),
+            conclusion: "success",
+            pull_requests: [{ number: 440 }],
+          },
+          repository: { full_name: "chaitin/agent-compose" },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      ignored: true,
+      reason: "check suite does not have a supported failure conclusion",
+    });
+    expect(calls).toBe(0);
+  });
 });
 
 async function schedulerScript(): Promise<string> {

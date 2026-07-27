@@ -126,6 +126,35 @@ var GitHubClient = class {
       if (batch.length < 100) return comments;
     }
   }
+  async listCheckRuns(repository, ref) {
+    if (!/^[0-9a-f]{40}$/.test(ref)) {
+      throw new Error("invalid GitHub check run ref");
+    }
+    const runs = [];
+    for (let page = 1; ; page += 1) {
+      const value = await this.#request(
+        "GET",
+        `/repos/${repositoryPath(repository)}/commits/${ref}/check-runs?per_page=100&page=${page}`
+      );
+      const batch = value.check_runs ?? [];
+      runs.push(...batch.map(normalizeCheckRun));
+      if (batch.length < 100) return runs;
+    }
+  }
+  async listCheckRunAnnotations(repository, checkRunId) {
+    if (!Number.isSafeInteger(checkRunId) || checkRunId <= 0) {
+      throw new Error("invalid GitHub check run ID");
+    }
+    const annotations = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.#request(
+        "GET",
+        `/repos/${repositoryPath(repository)}/check-runs/${checkRunId}/annotations?per_page=100&page=${page}`
+      );
+      annotations.push(...batch.map(normalizeCheckRunAnnotation));
+      if (batch.length < 100) return annotations;
+    }
+  }
   async listOpenPullRequestsByHead(repository, branch) {
     const owner = repository.split("/")[0];
     const query = new URLSearchParams({
@@ -257,6 +286,36 @@ function normalizeReviewComment(comment) {
     ...comment.original_commit_id ? { originalCommitId: comment.original_commit_id } : {},
     ...comment.in_reply_to_id !== void 0 ? { inReplyToId: comment.in_reply_to_id } : {},
     ...comment.pull_request_review_id !== void 0 ? { pullRequestReviewId: comment.pull_request_review_id } : {}
+  };
+}
+function normalizeCheckRun(value) {
+  const checkSuiteId = value.check_suite?.id;
+  if (!Number.isSafeInteger(checkSuiteId) || checkSuiteId <= 0) {
+    throw new Error(`GitHub check run ${value.id} has no valid check suite ID`);
+  }
+  return {
+    id: value.id,
+    checkSuiteId,
+    name: truncateText(value.name ?? "", 300),
+    status: value.status,
+    ...value.conclusion ? { conclusion: value.conclusion } : {},
+    ...value.html_url ? { htmlUrl: value.html_url } : {},
+    output: {
+      title: truncateText(value.output?.title ?? "", 1e3),
+      summary: truncateText(value.output?.summary ?? "", 8e3),
+      text: truncateText(value.output?.text ?? "", 8e3)
+    }
+  };
+}
+function normalizeCheckRunAnnotation(value) {
+  return {
+    path: truncateText(value.path ?? "", 1e3),
+    startLine: value.start_line,
+    endLine: value.end_line,
+    level: truncateText(value.annotation_level ?? "", 50),
+    message: truncateText(value.message ?? "", 2e3),
+    ...value.title ? { title: truncateText(value.title, 500) } : {},
+    ...value.raw_details ? { rawDetails: truncateText(value.raw_details, 4e3) } : {}
   };
 }
 function normalizeUser(user) {

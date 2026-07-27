@@ -1,0 +1,13 @@
+{
+  "action": "completed",
+  "check_suite": {
+    "id": 88001,
+    "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "completed",
+    "conclusion": "failure",
+    "pull_requests": [{ "number": 440 }]
+  },
+  "repository": {
+    "full_name": "chaitin/agent-compose"
+  }
+}

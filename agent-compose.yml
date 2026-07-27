@@ -45,7 +45,7 @@ agents:
   draft-pr:
     enabled: true
     display_name: Draft PR Agent (GitHub)
-    description: Implement maintainer-approved Issues and create validated Draft Pull Requests.
+    description: Implement approved Issues, create Draft Pull Requests, and repair verified review or CI failures.
     provider: codex
     model: ${DRAFT_PR_MODEL}
     image: agent-compose-guest:local
