@@ -1,8 +1,7 @@
 import type { Issue, IssueComment } from "../issues/types.js";
-import {
-  COMMENT_MARKER_PREFIX,
-  issueFingerprint,
-} from "../issue-triage/comment.js";
+import { issueFingerprint } from "../issues/fingerprint.js";
+import { isIssueTriageComment } from "../issues/managed-comments.js";
+import { truncateText } from "../runtime/text.js";
 import {
   buildDraftPrStatusComment,
   DRAFT_PR_COMMENT_PREFIX,
@@ -15,6 +14,11 @@ import {
   type DraftPrPolicy,
 } from "./policy.js";
 import type { DraftPrProvider } from "./provider.js";
+import {
+  assertAllowedRepository,
+  repositoryCloneUrl,
+  sanitizeTitle,
+} from "./repository.js";
 import {
   draftPrSubmissionSchema,
   type DraftPrAnalysis,
@@ -527,12 +531,15 @@ function selectContextComments(
       return !(
         managedBot &&
         (comment.body.startsWith(DRAFT_PR_COMMENT_PREFIX) ||
-          comment.body.startsWith(COMMENT_MARKER_PREFIX))
+          isIssueTriageComment(comment.body))
       );
     })
     .sort((left, right) => left.id - right.id)
     .slice(-50)
-    .map((comment) => ({ ...comment, body: truncate(comment.body, 4000) }));
+    .map((comment) => ({
+      ...comment,
+      body: truncateText(comment.body, 4000),
+    }));
 }
 
 function validateImplementedAnalysis(
@@ -599,14 +606,6 @@ function buildPullRequestBody(
   return lines.join("\n");
 }
 
-function sanitizeTitle(value: string): string {
-  return value
-    .replace(/[\r\n]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
-}
-
 function sanitizeLine(value: string): string {
   return value
     .replace(/<!--[\s\S]*?-->/g, "")
@@ -620,32 +619,9 @@ function sanitizeCode(value: string): string {
   return sanitizeLine(value).replace(/`/g, "'");
 }
 
-function repositoryCloneUrl(serverUrl: string, repository: string): string {
-  const base = new URL(serverUrl);
-  if (base.protocol !== "https:") {
-    throw new Error("GitHub server URL must use HTTPS");
-  }
-  base.pathname = `${base.pathname.replace(/\/$/, "")}/${repository}.git`;
-  base.search = "";
-  base.hash = "";
-  return base.toString();
-}
-
 function requiredBotLogin(value?: string): string {
   const normalized = value?.trim();
   if (!normalized)
     throw new Error("Draft PR bot login is required in apply mode");
   return normalized;
-}
-
-function assertAllowedRepository(repository: string, allowed: string): void {
-  if (!allowed.trim())
-    throw new Error("Draft PR repository allowlist is required");
-  if (repository.trim().toLowerCase() !== allowed.trim().toLowerCase()) {
-    throw new Error("repository is outside the Draft PR allowlist");
-  }
-}
-
-function truncate(value: string, max: number): string {
-  return value.length <= max ? value : value.slice(0, max);
 }

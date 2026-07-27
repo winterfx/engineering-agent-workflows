@@ -5,9 +5,19 @@ var __export = (target, all) => {
 };
 
 // src/draft-pr/main.ts
-import { readFile } from "node:fs/promises";
+import { readFile as readFile2 } from "node:fs/promises";
 import path2 from "node:path";
 import { fileURLToPath } from "node:url";
+
+// src/issues/search.ts
+function issueSearchText(title) {
+  return title.replace(/^\[[^\]]+\]\s*:?\s*/, "").replace(/["'`:+(){}[\]\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+}
+
+// src/runtime/text.ts
+function truncateText(value, max) {
+  return value.length <= max ? value : value.slice(0, max);
+}
 
 // src/github/client.ts
 var GitHubClient = class {
@@ -33,7 +43,7 @@ var GitHubClient = class {
     return normalizeIssue(issue2);
   }
   async searchCandidates(repository, issue2, limit) {
-    const title = searchText(issue2.title);
+    const title = issueSearchText(issue2.title);
     if (!title) return [];
     const query = new URLSearchParams({
       q: `repo:${repository} is:issue in:title ${title}`,
@@ -48,7 +58,7 @@ var GitHubClient = class {
     ).slice(0, limit).map((candidate) => ({
       number: candidate.number,
       title: candidate.title,
-      body: truncate(candidate.body ?? "", 4e3),
+      body: truncateText(candidate.body ?? "", 4e3),
       state: candidate.state,
       labels: labelNames(candidate.labels),
       url: candidate.html_url
@@ -114,6 +124,35 @@ var GitHubClient = class {
       );
       comments.push(...batch.map(normalizeReviewComment));
       if (batch.length < 100) return comments;
+    }
+  }
+  async listCheckRuns(repository, ref) {
+    if (!/^[0-9a-f]{40}$/.test(ref)) {
+      throw new Error("invalid GitHub check run ref");
+    }
+    const runs = [];
+    for (let page = 1; ; page += 1) {
+      const value = await this.#request(
+        "GET",
+        `/repos/${repositoryPath(repository)}/commits/${ref}/check-runs?per_page=100&page=${page}`
+      );
+      const batch = value.check_runs ?? [];
+      runs.push(...batch.map(normalizeCheckRun));
+      if (batch.length < 100) return runs;
+    }
+  }
+  async listCheckRunAnnotations(repository, checkRunId) {
+    if (!Number.isSafeInteger(checkRunId) || checkRunId <= 0) {
+      throw new Error("invalid GitHub check run ID");
+    }
+    const annotations = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.#request(
+        "GET",
+        `/repos/${repositoryPath(repository)}/check-runs/${checkRunId}/annotations?per_page=100&page=${page}`
+      );
+      annotations.push(...batch.map(normalizeCheckRunAnnotation));
+      if (batch.length < 100) return annotations;
     }
   }
   async listOpenPullRequestsByHead(repository, branch) {
@@ -249,6 +288,36 @@ function normalizeReviewComment(comment) {
     ...comment.pull_request_review_id !== void 0 ? { pullRequestReviewId: comment.pull_request_review_id } : {}
   };
 }
+function normalizeCheckRun(value) {
+  const checkSuiteId = value.check_suite?.id;
+  if (!Number.isSafeInteger(checkSuiteId) || checkSuiteId <= 0) {
+    throw new Error(`GitHub check run ${value.id} has no valid check suite ID`);
+  }
+  return {
+    id: value.id,
+    checkSuiteId,
+    name: truncateText(value.name ?? "", 300),
+    status: value.status,
+    ...value.conclusion ? { conclusion: value.conclusion } : {},
+    ...value.html_url ? { htmlUrl: value.html_url } : {},
+    output: {
+      title: truncateText(value.output?.title ?? "", 1e3),
+      summary: truncateText(value.output?.summary ?? "", 8e3),
+      text: truncateText(value.output?.text ?? "", 8e3)
+    }
+  };
+}
+function normalizeCheckRunAnnotation(value) {
+  return {
+    path: truncateText(value.path ?? "", 1e3),
+    startLine: value.start_line,
+    endLine: value.end_line,
+    level: truncateText(value.annotation_level ?? "", 50),
+    message: truncateText(value.message ?? "", 2e3),
+    ...value.title ? { title: truncateText(value.title, 500) } : {},
+    ...value.raw_details ? { rawDetails: truncateText(value.raw_details, 4e3) } : {}
+  };
+}
 function normalizeUser(user) {
   return {
     login: user.login,
@@ -263,22 +332,94 @@ function normalizeColor(color) {
   const normalized = color.trim().replace(/^#/, "");
   return /^[0-9a-f]{6}$/i.test(normalized) ? normalized : "ededed";
 }
-function searchText(title) {
-  return title.replace(/^\[[^\]]+\]\s*:?\s*/, "").replace(/["'`:+(){}[\]\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-}
-function truncate(value, max) {
-  return value.length <= max ? value : value.slice(0, max);
-}
 async function responseError(method, path3, response) {
   const text = await response.text().catch(() => "");
   return new Error(
-    `GitHub API ${method} ${path3} failed with HTTP ${response.status}: ${truncate(text, 1e3)}`
+    `GitHub API ${method} ${path3} failed with HTTP ${response.status}: ${truncateText(text, 1e3)}`
   );
 }
 
 // src/issues/types.ts
 function isProjectPath(value) {
   return /^[^/\s]+(?:\/[^/\s]+)+$/.test(value);
+}
+
+// src/runtime/cli.ts
+function requiredArgumentValue(args, index, name) {
+  const value = args[index]?.trim();
+  if (!value) throw new Error(`${name} requires a value`);
+  return value;
+}
+function envBoolean(value) {
+  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
+}
+function isPositiveInteger(value) {
+  const number4 = Number(value?.trim());
+  return Number.isSafeInteger(number4) && number4 > 0;
+}
+
+// src/runtime/errors.ts
+function errorMessage(error51) {
+  return error51 instanceof Error ? error51.message : String(error51);
+}
+
+// src/runtime/load-json.ts
+import { readFile } from "node:fs/promises";
+async function loadJsonFromCandidates(candidates, parse3, failureMessage) {
+  let lastError;
+  for (const candidate of candidates) {
+    try {
+      return parse3(JSON.parse(await readFile(candidate, "utf8")));
+    } catch (error51) {
+      lastError = error51;
+    }
+  }
+  throw new Error(`${failureMessage}: ${errorMessage(lastError)}`);
+}
+
+// src/draft-pr/ci-tool.ts
+import crypto2 from "node:crypto";
+
+// src/draft-pr/ci-comment.ts
+var CI_FIX_COMMENT_PREFIX = "<!-- engineering-agent-workflows:ci-fix:v1";
+function findCiFixComment(comments, botLogin) {
+  const expected = botLogin.trim().toLowerCase();
+  return comments.find(
+    (comment) => comment.user?.login.trim().toLowerCase() === expected && comment.body.startsWith(CI_FIX_COMMENT_PREFIX)
+  );
+}
+function parseCiFixState(comment) {
+  if (!comment) return emptyCiFixState();
+  const marker = comment.body.split("\n", 1)[0] ?? "";
+  const match = marker.match(
+    /^<!-- engineering-agent-workflows:ci-fix:v1 suite=(\d+) attempts=(\d+) head=([0-9a-f]{40}|none) status=(fixing|fixed|no-change|needs-approval|failed) -->$/
+  );
+  if (!match) return emptyCiFixState();
+  return {
+    checkSuiteId: Number(match[1]),
+    attempts: Number(match[2]),
+    headSha: match[3] === "none" ? "" : match[3],
+    status: match[4]
+  };
+}
+function buildCiFixComment(state) {
+  const marker = `${CI_FIX_COMMENT_PREFIX} suite=${state.checkSuiteId} attempts=${state.attempts} head=${state.headSha || "none"} status=${state.status} -->`;
+  const messages = {
+    fixing: "The Draft PR Agent is validating the latest failed CI checks.",
+    fixed: "The Draft PR Agent pushed a validated fix for the failed CI checks.",
+    "no-change": "The Draft PR Agent inspected the failed CI checks and made no code change.",
+    "needs-approval": "Automatic CI fixes paused for maintainer review.",
+    failed: "The Draft PR Agent could not complete the latest CI fix attempt."
+  };
+  return [marker, "## CI follow-up", "", messages[state.status]].join("\n");
+}
+function emptyCiFixState() {
+  return {
+    checkSuiteId: 0,
+    attempts: 0,
+    headSha: "",
+    status: "fixed"
+  };
 }
 
 // node_modules/zod/v4/classic/external.js
@@ -14795,6 +14936,46 @@ function date4(params) {
 // node_modules/zod/v4/classic/external.js
 config(en_default());
 
+// src/draft-pr/ci-schema.ts
+var ciCheckReferenceSchema = external_exports.object({
+  checkRunId: external_exports.number().int().positive()
+});
+var ciFixAnalysisSchema = external_exports.object({
+  outcome: external_exports.enum(["fixed", "no_change", "needs_approval", "blocked"]),
+  commitTitle: external_exports.string().max(120),
+  summary: external_exports.array(external_exports.string().min(1).max(500)).max(8),
+  failures: external_exports.array(
+    external_exports.object({
+      checkRunId: external_exports.number().int().positive(),
+      disposition: external_exports.enum(["fixed", "not_reproducible", "needs_approval"]),
+      reason: external_exports.string().min(1).max(1e3)
+    })
+  ).min(1).max(100),
+  tests: external_exports.array(
+    external_exports.object({
+      command: external_exports.string().min(1).max(300),
+      status: external_exports.enum(["passed", "failed", "not_run"]),
+      details: external_exports.string().max(1e3)
+    })
+  ).max(20),
+  risk: external_exports.object({
+    level: external_exports.enum(["low", "medium", "high"]),
+    reasons: external_exports.array(external_exports.string().min(1).max(500)).max(8)
+  }),
+  notes: external_exports.array(external_exports.string().min(1).max(500)).max(8)
+});
+var ciFixSubmissionSchema = external_exports.object({
+  checkSuiteId: external_exports.number().int().positive(),
+  failuresFingerprint: external_exports.string().regex(/^[0-9a-f]{20}$/),
+  checkRefs: external_exports.array(ciCheckReferenceSchema).min(1).max(100),
+  workspacePath: external_exports.string().min(1).max(2e3),
+  branch: external_exports.string().min(1).max(250),
+  baseBranch: external_exports.string().min(1).max(250),
+  expectedHeadSha: external_exports.string().regex(/^[0-9a-f]{40}$/),
+  previousAttempts: external_exports.number().int().nonnegative(),
+  analysis: ciFixAnalysisSchema
+});
+
 // src/draft-pr/policy.ts
 var draftPrPolicySchema = external_exports.object({
   version: external_exports.number().int().positive(),
@@ -14849,110 +15030,28 @@ function hasAnyLabel(labels, expected) {
   return expected.some((label) => hasLabel(labels, label));
 }
 
-// src/draft-pr/review-tool.ts
-import crypto2 from "node:crypto";
-
-// src/draft-pr/review-comment.ts
-var REVIEW_FIX_COMMENT_PREFIX = "<!-- engineering-agent-workflows:review-fix:v";
-var REVIEW_FIX_COMMENT_V2_PREFIX = `${REVIEW_FIX_COMMENT_PREFIX}2`;
-function findReviewFixComment(comments, botLogin) {
-  const expected = botLogin.trim().toLowerCase();
-  return comments.find(
-    (comment) => comment.user?.login.trim().toLowerCase() === expected && comment.body.startsWith(REVIEW_FIX_COMMENT_PREFIX)
-  );
-}
-function parseReviewFixState(comment) {
-  if (!comment) return emptyReviewFixState();
-  const marker = comment.body.split("\n", 1)[0] ?? "";
-  const v2Match = marker.match(
-    /^<!-- engineering-agent-workflows:review-fix:v2 conversation=(\d+) review=(\d+) iterations=(\d+) head=([0-9a-f]{40}|none) status=(fixing|fixed|no-change|needs-approval|failed) -->$/
-  );
-  if (v2Match) {
-    return {
-      conversationCursor: Number(v2Match[1]),
-      reviewCursor: Number(v2Match[2]),
-      iterations: Number(v2Match[3]),
-      headSha: v2Match[4] === "none" ? "" : v2Match[4],
-      status: v2Match[5]
-    };
+// src/draft-pr/repository.ts
+function repositoryCloneUrl(serverUrl, repository) {
+  const base = new URL(serverUrl);
+  if (base.protocol !== "https:") {
+    throw new Error("GitHub server URL must use HTTPS");
   }
-  const v1Match = marker.match(
-    /^<!-- engineering-agent-workflows:review-fix:v1 cursor=(\d+) iterations=(\d+) head=([0-9a-f]{40}|none) status=(fixing|fixed|no-change|needs-approval|failed) -->$/
-  );
-  if (!v1Match) return emptyReviewFixState();
-  return {
-    conversationCursor: Number(v1Match[1]),
-    reviewCursor: 0,
-    iterations: Number(v1Match[2]),
-    headSha: v1Match[3] === "none" ? "" : v1Match[3],
-    status: v1Match[4]
-  };
+  base.pathname = `${base.pathname.replace(/\/$/, "")}/${repository}.git`;
+  base.search = "";
+  base.hash = "";
+  return base.toString();
 }
-function buildReviewFixComment(state) {
-  const marker = `${REVIEW_FIX_COMMENT_V2_PREFIX} conversation=${state.conversationCursor} review=${state.reviewCursor} iterations=${state.iterations} head=${state.headSha || "none"} status=${state.status} -->`;
-  const messages = {
-    fixing: "The Draft PR Agent is validating new MonkeyScan findings.",
-    fixed: "The Draft PR Agent pushed a validated fix for the latest MonkeyScan findings.",
-    "no-change": "The Draft PR Agent verified the latest MonkeyScan findings and made no code change.",
-    "needs-approval": "Automatic MonkeyScan fixes paused for maintainer review.",
-    failed: "The Draft PR Agent could not complete the latest MonkeyScan fix attempt."
-  };
-  return [marker, "## MonkeyScan follow-up", "", messages[state.status]].join(
-    "\n"
-  );
+function sanitizeTitle(value) {
+  return value.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
 }
-function emptyReviewFixState() {
-  return {
-    conversationCursor: 0,
-    reviewCursor: 0,
-    iterations: 0,
-    headSha: "",
-    status: "fixed"
-  };
+function assertAllowedRepository(repository, allowed) {
+  if (!allowed.trim()) {
+    throw new Error("Draft PR repository allowlist is required");
+  }
+  if (repository.trim().toLowerCase() !== allowed.trim().toLowerCase()) {
+    throw new Error("repository is outside the Draft PR allowlist");
+  }
 }
-
-// src/draft-pr/review-schema.ts
-var reviewCommentSourceSchema = external_exports.enum(["conversation", "review"]);
-var reviewCommentReferenceSchema = external_exports.object({
-  source: reviewCommentSourceSchema,
-  commentId: external_exports.number().int().positive()
-});
-var reviewTestSchema = external_exports.object({
-  command: external_exports.string().min(1).max(300),
-  status: external_exports.enum(["passed", "failed", "not_run"]),
-  details: external_exports.string().max(1e3)
-});
-var reviewFixAnalysisSchema = external_exports.object({
-  outcome: external_exports.enum(["fixed", "no_change", "needs_approval", "blocked"]),
-  commitTitle: external_exports.string().max(120),
-  summary: external_exports.array(external_exports.string().min(1).max(500)).max(8),
-  findings: external_exports.array(
-    external_exports.object({
-      source: reviewCommentSourceSchema,
-      commentId: external_exports.number().int().positive(),
-      disposition: external_exports.enum(["fixed", "not_reproducible", "needs_approval"]),
-      reason: external_exports.string().min(1).max(1e3)
-    })
-  ).max(100),
-  tests: external_exports.array(reviewTestSchema).max(20),
-  risk: external_exports.object({
-    level: external_exports.enum(["low", "medium", "high"]),
-    reasons: external_exports.array(external_exports.string().min(1).max(500)).max(8)
-  }),
-  notes: external_exports.array(external_exports.string().min(1).max(500)).max(8)
-});
-var reviewFixSubmissionSchema = external_exports.object({
-  commentsFingerprint: external_exports.string().regex(/^[0-9a-f]{20}$/),
-  commentRefs: external_exports.array(reviewCommentReferenceSchema).min(1).max(100),
-  workspacePath: external_exports.string().min(1).max(2e3),
-  branch: external_exports.string().min(1).max(250),
-  baseBranch: external_exports.string().min(1).max(250),
-  expectedHeadSha: external_exports.string().regex(/^[0-9a-f]{40}$/),
-  previousConversationCursor: external_exports.number().int().nonnegative(),
-  previousReviewCursor: external_exports.number().int().nonnegative(),
-  previousIterations: external_exports.number().int().nonnegative(),
-  analysis: reviewFixAnalysisSchema
-});
 
 // src/draft-pr/workspace.ts
 import crypto from "node:crypto";
@@ -15345,6 +15444,525 @@ function isAlreadyExists(error51) {
   return typeof error51 === "object" && error51 !== null && "code" in error51 && error51.code === "EEXIST";
 }
 
+// src/draft-pr/ci-tool.ts
+var FAILED_CONCLUSIONS = /* @__PURE__ */ new Set([
+  "action_required",
+  "failure",
+  "startup_failure",
+  "timed_out"
+]);
+var MAX_ANNOTATIONS_PER_CHECK = 50;
+async function prepareCiFix(repository, pullRequestNumber, expectedHeadSha, checkSuiteId, dependencies) {
+  assertAllowedRepository(repository, dependencies.allowedRepository);
+  requireBotIdentity(dependencies);
+  validateEventTarget(expectedHeadSha, checkSuiteId);
+  const [pullRequest, comments] = await Promise.all([
+    dependencies.provider.getPullRequest(repository, pullRequestNumber),
+    dependencies.provider.listComments(repository, pullRequestNumber)
+  ]);
+  const reason = ineligibleReason(pullRequest, repository, dependencies);
+  if (reason) {
+    return skipped(repository, pullRequestNumber, checkSuiteId, reason);
+  }
+  if (pullRequest.headSha !== expectedHeadSha) {
+    return skipped(
+      repository,
+      pullRequestNumber,
+      checkSuiteId,
+      "CI event is for a stale Pull Request head"
+    );
+  }
+  const state = ciState(comments, dependencies);
+  if (state.checkSuiteId === checkSuiteId && ["no-change", "needs-approval"].includes(state.status)) {
+    return skipped(
+      repository,
+      pullRequestNumber,
+      checkSuiteId,
+      "CI check suite was already processed"
+    );
+  }
+  if (state.attempts >= dependencies.policy.maxFixIterations) {
+    if (dependencies.apply) {
+      await upsertCiState(
+        repository,
+        pullRequestNumber,
+        {
+          checkSuiteId,
+          attempts: state.attempts,
+          headSha: expectedHeadSha,
+          status: "needs-approval"
+        },
+        comments,
+        dependencies
+      );
+    }
+    return skipped(
+      repository,
+      pullRequestNumber,
+      checkSuiteId,
+      "automatic CI fix iteration limit reached"
+    );
+  }
+  const failures = await loadFailures(
+    repository,
+    expectedHeadSha,
+    checkSuiteId,
+    dependencies
+  );
+  if (failures.length === 0) {
+    return skipped(
+      repository,
+      pullRequestNumber,
+      checkSuiteId,
+      "check suite has no supported failed checks"
+    );
+  }
+  let prepared;
+  try {
+    prepared = await dependencies.workspace.prepareReview({
+      repository,
+      pullRequestNumber,
+      cloneUrl: repositoryCloneUrl(dependencies.serverUrl, repository),
+      baseBranch: pullRequest.base,
+      branch: pullRequest.head,
+      expectedHeadSha
+    });
+  } catch (error51) {
+    if (error51 instanceof DraftPrWorkspaceLockError) {
+      return skipped(
+        repository,
+        pullRequestNumber,
+        checkSuiteId,
+        "another Pull Request fix run holds the workspace lock"
+      );
+    }
+    throw error51;
+  }
+  if (dependencies.apply) {
+    await upsertCiState(
+      repository,
+      pullRequestNumber,
+      {
+        checkSuiteId,
+        attempts: state.attempts,
+        headSha: expectedHeadSha,
+        status: "fixing"
+      },
+      comments,
+      dependencies
+    );
+  }
+  return {
+    ok: true,
+    repository,
+    pullRequestNumber,
+    checkSuiteId,
+    workspacePath: prepared.path,
+    branch: prepared.branch,
+    baseBranch: prepared.baseBranch,
+    expectedHeadSha: prepared.baseCommit,
+    failuresFingerprint: fingerprintFailures(failures),
+    previousAttempts: state.attempts,
+    failures
+  };
+}
+async function applyCiFix(repository, pullRequestNumber, submissionInput, dependencies) {
+  assertAllowedRepository(repository, dependencies.allowedRepository);
+  requireBotIdentity(dependencies);
+  const submission = ciFixSubmissionSchema.parse(submissionInput);
+  const [pullRequest, comments, failures] = await Promise.all([
+    dependencies.provider.getPullRequest(repository, pullRequestNumber),
+    dependencies.provider.listComments(repository, pullRequestNumber),
+    loadFailures(
+      repository,
+      submission.expectedHeadSha,
+      submission.checkSuiteId,
+      dependencies
+    )
+  ]);
+  const reason = ineligibleReason(pullRequest, repository, dependencies);
+  if (reason) throw new Error(reason);
+  if (pullRequest.headSha !== submission.expectedHeadSha) {
+    throw new Error("Pull Request head changed after CI fix preparation");
+  }
+  const expectedIds = submission.checkRefs.map((value) => value.checkRunId);
+  const actualIds = failures.map((value) => value.checkRunId);
+  if (new Set(expectedIds).size !== expectedIds.length || expectedIds.length !== actualIds.length || expectedIds.some((id, index) => id !== actualIds[index]) || fingerprintFailures(failures) !== submission.failuresFingerprint) {
+    throw new Error("failed CI checks changed after fix preparation");
+  }
+  validateFailureCoverage(submission.analysis, expectedIds);
+  const inspection = await dependencies.workspace.inspect(
+    submission.workspacePath
+  );
+  if (inspection.headCommit !== submission.expectedHeadSha) {
+    throw new Error("the Agent committed or moved HEAD in the CI workspace");
+  }
+  const nextAttempts = submission.previousAttempts + 1;
+  if (submission.analysis.outcome !== "fixed") {
+    if (inspection.changedFiles.length > 0) {
+      throw new Error(
+        `${submission.analysis.outcome} CI result contains changes`
+      );
+    }
+    if (submission.analysis.outcome === "no_change" && submission.analysis.failures.some(
+      (failure) => failure.disposition !== "not_reproducible"
+    )) {
+      throw new Error(
+        "no_change CI result requires every failure to be not reproducible"
+      );
+    }
+    const status = submission.analysis.outcome === "needs_approval" ? "needs-approval" : submission.analysis.outcome === "no_change" ? "no-change" : "failed";
+    await finishWithoutPush(
+      repository,
+      pullRequestNumber,
+      submission,
+      nextAttempts,
+      status,
+      comments,
+      dependencies
+    );
+    return {
+      ok: true,
+      repository,
+      pullRequestNumber,
+      applied: dependencies.apply,
+      outcome: submission.analysis.outcome,
+      inspection
+    };
+  }
+  validateFixedAnalysis(submission.analysis, inspection);
+  const approvalReasons = requiresApproval(
+    submission.analysis,
+    inspection,
+    false,
+    dependencies.policy
+  );
+  if (approvalReasons.length > 0) {
+    await finishWithoutPush(
+      repository,
+      pullRequestNumber,
+      submission,
+      nextAttempts,
+      "needs-approval",
+      comments,
+      dependencies
+    );
+    return {
+      ok: true,
+      repository,
+      pullRequestNumber,
+      applied: dependencies.apply,
+      outcome: "needs_approval",
+      inspection
+    };
+  }
+  if (!dependencies.apply) {
+    await dependencies.workspace.cleanupReview(repository, pullRequestNumber);
+    return {
+      ok: true,
+      repository,
+      pullRequestNumber,
+      applied: false,
+      outcome: "fixed",
+      inspection
+    };
+  }
+  const commit = await dependencies.workspace.commitAndPush(
+    submission.workspacePath,
+    submission.branch,
+    sanitizeTitle(submission.analysis.commitTitle),
+    repositoryCloneUrl(dependencies.serverUrl, repository)
+  );
+  await upsertCiState(
+    repository,
+    pullRequestNumber,
+    {
+      checkSuiteId: submission.checkSuiteId,
+      attempts: nextAttempts,
+      headSha: commit,
+      status: "fixed"
+    },
+    comments,
+    dependencies
+  );
+  await dependencies.workspace.cleanupReview(repository, pullRequestNumber);
+  return {
+    ok: true,
+    repository,
+    pullRequestNumber,
+    applied: true,
+    outcome: "fixed",
+    commit,
+    inspection
+  };
+}
+async function failCiFix(repository, pullRequestNumber, checkSuiteId, attempts, headSha, dependencies) {
+  assertAllowedRepository(repository, dependencies.allowedRepository);
+  try {
+    if (dependencies.apply) {
+      const comments = await dependencies.provider.listComments(
+        repository,
+        pullRequestNumber
+      );
+      await upsertCiState(
+        repository,
+        pullRequestNumber,
+        {
+          checkSuiteId,
+          attempts,
+          headSha,
+          status: "failed"
+        },
+        comments,
+        dependencies
+      );
+    }
+  } finally {
+    await dependencies.workspace.cleanupReview(repository, pullRequestNumber);
+  }
+  return {
+    ok: true,
+    repository,
+    pullRequestNumber,
+    applied: dependencies.apply,
+    outcome: "failed"
+  };
+}
+async function loadFailures(repository, headSha, checkSuiteId, dependencies) {
+  const runs = (await dependencies.provider.listCheckRuns(repository, headSha)).filter(
+    (run) => run.checkSuiteId === checkSuiteId && run.status === "completed" && FAILED_CONCLUSIONS.has(run.conclusion ?? "")
+  ).sort((left, right) => left.id - right.id);
+  if (runs.length > dependencies.policy.maxReviewComments) {
+    throw new Error(
+      `CI check suite has ${runs.length} failed checks (limit ${dependencies.policy.maxReviewComments})`
+    );
+  }
+  return Promise.all(
+    runs.map(async (run) => ({
+      checkRunId: run.id,
+      name: run.name,
+      conclusion: run.conclusion,
+      ...run.htmlUrl ? { htmlUrl: run.htmlUrl } : {},
+      output: run.output,
+      annotations: (await dependencies.provider.listCheckRunAnnotations(repository, run.id)).slice(0, MAX_ANNOTATIONS_PER_CHECK)
+    }))
+  );
+}
+function fingerprintFailures(failures) {
+  return crypto2.createHash("sha256").update(JSON.stringify(failures)).digest("hex").slice(0, 20);
+}
+function validateFailureCoverage(analysis, expectedIds) {
+  const actual = analysis.failures.map((failure) => failure.checkRunId);
+  if (new Set(actual).size !== actual.length || actual.length !== expectedIds.length || actual.some((id, index) => id !== expectedIds[index])) {
+    throw new Error(
+      "CI fix analysis must address every failed check exactly once"
+    );
+  }
+  if (analysis.outcome === "fixed" && analysis.failures.some(
+    (failure) => failure.disposition === "needs_approval"
+  )) {
+    throw new Error("fixed CI result cannot contain approval-gated failures");
+  }
+}
+function validateFixedAnalysis(analysis, inspection) {
+  if (inspection.changedFiles.length === 0) {
+    throw new Error("fixed CI result contains no repository changes");
+  }
+  if (!inspection.diffCheckPassed) {
+    throw new Error("CI fix failed git diff --check");
+  }
+  if (inspection.secretFindingPaths.length > 0) {
+    throw new Error("CI fix contains potential credential material");
+  }
+  if (analysis.tests.some((test) => test.status === "failed")) {
+    throw new Error("fixed CI result reports a failed validation command");
+  }
+}
+function ineligibleReason(pullRequest, repository, dependencies) {
+  if (pullRequest.state.toLowerCase() !== "open")
+    return "Pull Request is not open";
+  if (!pullRequest.head.startsWith(dependencies.policy.branchPrefix)) {
+    return "Pull Request branch is not managed by the Draft PR Agent";
+  }
+  if (pullRequest.headRepository?.trim().toLowerCase() !== repository.trim().toLowerCase()) {
+    return "Pull Request head repository is not the allowlisted repository";
+  }
+  if (!pullRequest.headSha || !/^[0-9a-f]{40}$/.test(pullRequest.headSha)) {
+    return "Pull Request has no valid head SHA";
+  }
+  return void 0;
+}
+function validateEventTarget(headSha, checkSuiteId) {
+  if (!/^[0-9a-f]{40}$/.test(headSha)) {
+    throw new Error("invalid CI event head SHA");
+  }
+  if (!Number.isSafeInteger(checkSuiteId) || checkSuiteId <= 0) {
+    throw new Error("invalid CI check suite ID");
+  }
+}
+function ciState(comments, dependencies) {
+  return parseCiFixState(
+    findCiFixComment(comments, dependencies.botLogin?.trim() ?? "")
+  );
+}
+async function finishWithoutPush(repository, pullRequestNumber, submission, attempts, status, comments, dependencies) {
+  if (dependencies.apply) {
+    await upsertCiState(
+      repository,
+      pullRequestNumber,
+      {
+        checkSuiteId: submission.checkSuiteId,
+        attempts,
+        headSha: submission.expectedHeadSha,
+        status
+      },
+      comments,
+      dependencies
+    );
+  }
+  await dependencies.workspace.cleanupReview(repository, pullRequestNumber);
+}
+async function upsertCiState(repository, pullRequestNumber, state, comments, dependencies) {
+  const botLogin = dependencies.botLogin?.trim() ?? "";
+  if (!botLogin) throw new Error("GitHub bot login is required in apply mode");
+  const existing = findCiFixComment(comments, botLogin);
+  const body = buildCiFixComment(state);
+  if (existing) {
+    await dependencies.provider.updateComment(
+      repository,
+      pullRequestNumber,
+      existing.id,
+      body
+    );
+  } else {
+    await dependencies.provider.createComment(
+      repository,
+      pullRequestNumber,
+      body
+    );
+  }
+}
+function requireBotIdentity(dependencies) {
+  if (dependencies.apply && !dependencies.botLogin?.trim()) {
+    throw new Error("GitHub bot login is required for CI fixes in apply mode");
+  }
+}
+function skipped(repository, pullRequestNumber, checkSuiteId, reason) {
+  return {
+    ok: true,
+    skipped: true,
+    reason,
+    repository,
+    pullRequestNumber,
+    checkSuiteId
+  };
+}
+
+// src/draft-pr/review-tool.ts
+import crypto3 from "node:crypto";
+
+// src/draft-pr/review-comment.ts
+var REVIEW_FIX_COMMENT_PREFIX = "<!-- engineering-agent-workflows:review-fix:v";
+var REVIEW_FIX_COMMENT_V2_PREFIX = `${REVIEW_FIX_COMMENT_PREFIX}2`;
+function findReviewFixComment(comments, botLogin) {
+  const expected = botLogin.trim().toLowerCase();
+  return comments.find(
+    (comment) => comment.user?.login.trim().toLowerCase() === expected && comment.body.startsWith(REVIEW_FIX_COMMENT_PREFIX)
+  );
+}
+function parseReviewFixState(comment) {
+  if (!comment) return emptyReviewFixState();
+  const marker = comment.body.split("\n", 1)[0] ?? "";
+  const v2Match = marker.match(
+    /^<!-- engineering-agent-workflows:review-fix:v2 conversation=(\d+) review=(\d+) iterations=(\d+) head=([0-9a-f]{40}|none) status=(fixing|fixed|no-change|needs-approval|failed) -->$/
+  );
+  if (v2Match) {
+    return {
+      conversationCursor: Number(v2Match[1]),
+      reviewCursor: Number(v2Match[2]),
+      iterations: Number(v2Match[3]),
+      headSha: v2Match[4] === "none" ? "" : v2Match[4],
+      status: v2Match[5]
+    };
+  }
+  const v1Match = marker.match(
+    /^<!-- engineering-agent-workflows:review-fix:v1 cursor=(\d+) iterations=(\d+) head=([0-9a-f]{40}|none) status=(fixing|fixed|no-change|needs-approval|failed) -->$/
+  );
+  if (!v1Match) return emptyReviewFixState();
+  return {
+    conversationCursor: Number(v1Match[1]),
+    reviewCursor: 0,
+    iterations: Number(v1Match[2]),
+    headSha: v1Match[3] === "none" ? "" : v1Match[3],
+    status: v1Match[4]
+  };
+}
+function buildReviewFixComment(state) {
+  const marker = `${REVIEW_FIX_COMMENT_V2_PREFIX} conversation=${state.conversationCursor} review=${state.reviewCursor} iterations=${state.iterations} head=${state.headSha || "none"} status=${state.status} -->`;
+  const messages = {
+    fixing: "The Draft PR Agent is validating new MonkeyScan findings.",
+    fixed: "The Draft PR Agent pushed a validated fix for the latest MonkeyScan findings.",
+    "no-change": "The Draft PR Agent verified the latest MonkeyScan findings and made no code change.",
+    "needs-approval": "Automatic MonkeyScan fixes paused for maintainer review.",
+    failed: "The Draft PR Agent could not complete the latest MonkeyScan fix attempt."
+  };
+  return [marker, "## MonkeyScan follow-up", "", messages[state.status]].join(
+    "\n"
+  );
+}
+function emptyReviewFixState() {
+  return {
+    conversationCursor: 0,
+    reviewCursor: 0,
+    iterations: 0,
+    headSha: "",
+    status: "fixed"
+  };
+}
+
+// src/draft-pr/review-schema.ts
+var reviewCommentSourceSchema = external_exports.enum(["conversation", "review"]);
+var reviewCommentReferenceSchema = external_exports.object({
+  source: reviewCommentSourceSchema,
+  commentId: external_exports.number().int().positive()
+});
+var reviewTestSchema = external_exports.object({
+  command: external_exports.string().min(1).max(300),
+  status: external_exports.enum(["passed", "failed", "not_run"]),
+  details: external_exports.string().max(1e3)
+});
+var reviewFixAnalysisSchema = external_exports.object({
+  outcome: external_exports.enum(["fixed", "no_change", "needs_approval", "blocked"]),
+  commitTitle: external_exports.string().max(120),
+  summary: external_exports.array(external_exports.string().min(1).max(500)).max(8),
+  findings: external_exports.array(
+    external_exports.object({
+      source: reviewCommentSourceSchema,
+      commentId: external_exports.number().int().positive(),
+      disposition: external_exports.enum(["fixed", "not_reproducible", "needs_approval"]),
+      reason: external_exports.string().min(1).max(1e3)
+    })
+  ).max(100),
+  tests: external_exports.array(reviewTestSchema).max(20),
+  risk: external_exports.object({
+    level: external_exports.enum(["low", "medium", "high"]),
+    reasons: external_exports.array(external_exports.string().min(1).max(500)).max(8)
+  }),
+  notes: external_exports.array(external_exports.string().min(1).max(500)).max(8)
+});
+var reviewFixSubmissionSchema = external_exports.object({
+  commentsFingerprint: external_exports.string().regex(/^[0-9a-f]{20}$/),
+  commentRefs: external_exports.array(reviewCommentReferenceSchema).min(1).max(100),
+  workspacePath: external_exports.string().min(1).max(2e3),
+  branch: external_exports.string().min(1).max(250),
+  baseBranch: external_exports.string().min(1).max(250),
+  expectedHeadSha: external_exports.string().regex(/^[0-9a-f]{40}$/),
+  previousConversationCursor: external_exports.number().int().nonnegative(),
+  previousReviewCursor: external_exports.number().int().nonnegative(),
+  previousIterations: external_exports.number().int().nonnegative(),
+  analysis: reviewFixAnalysisSchema
+});
+
 // src/draft-pr/review-tool.ts
 async function listReviewFixTargets(repository, dependencies) {
   assertAllowedRepository(repository, dependencies.allowedRepository);
@@ -15382,8 +16000,8 @@ async function prepareReviewFix(repository, pullRequestNumber, dependencies) {
       dependencies.provider.listReviewComments(repository, pullRequestNumber)
     ]
   );
-  const reason = ineligibleReason(pullRequest, repository, dependencies);
-  if (reason) return skipped(repository, pullRequestNumber, reason);
+  const reason = ineligibleReason2(pullRequest, repository, dependencies);
+  if (reason) return skipped2(repository, pullRequestNumber, reason);
   const state = reviewState(conversationComments, dependencies);
   const pending = pendingMonkeyScanComments(
     conversationComments,
@@ -15392,7 +16010,7 @@ async function prepareReviewFix(repository, pullRequestNumber, dependencies) {
     dependencies
   ).slice(0, dependencies.policy.maxReviewComments);
   if (pending.length === 0) {
-    return skipped(
+    return skipped2(
       repository,
       pullRequestNumber,
       "no unprocessed MonkeyScan comments"
@@ -15414,7 +16032,7 @@ async function prepareReviewFix(repository, pullRequestNumber, dependencies) {
         dependencies
       );
     }
-    return skipped(
+    return skipped2(
       repository,
       pullRequestNumber,
       "automatic MonkeyScan fix iteration limit reached"
@@ -15432,7 +16050,7 @@ async function prepareReviewFix(repository, pullRequestNumber, dependencies) {
     });
   } catch (error51) {
     if (error51 instanceof DraftPrWorkspaceLockError) {
-      return skipped(
+      return skipped2(
         repository,
         pullRequestNumber,
         "another review fix run holds the Pull Request lock"
@@ -15481,7 +16099,7 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
       dependencies.provider.listReviewComments(repository, pullRequestNumber)
     ]
   );
-  const reason = ineligibleReason(pullRequest, repository, dependencies);
+  const reason = ineligibleReason2(pullRequest, repository, dependencies);
   if (reason) throw new Error(reason);
   if (pullRequest.headSha !== submission.expectedHeadSha) {
     throw new Error("Pull Request head changed after review fix preparation");
@@ -15520,7 +16138,7 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
       throw new Error("no_change review result contains repository changes");
     }
     const status = submission.analysis.outcome === "needs_approval" ? "needs-approval" : submission.analysis.outcome === "no_change" ? "no-change" : "failed";
-    await finishWithoutPush(
+    await finishWithoutPush2(
       repository,
       pullRequestNumber,
       nextConversationCursor,
@@ -15548,7 +16166,7 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
     dependencies.policy
   );
   if (approvalReasons.length > 0) {
-    await finishWithoutPush(
+    await finishWithoutPush2(
       repository,
       pullRequestNumber,
       nextConversationCursor,
@@ -15672,9 +16290,9 @@ function isMonkeyScanComment(comment, dependencies) {
   return dependencies.monkeyScanBotUserId === void 0 || user.id === dependencies.monkeyScanBotUserId;
 }
 function eligiblePullRequest(pullRequest, repository, dependencies) {
-  return !ineligibleReason(pullRequest, repository, dependencies);
+  return !ineligibleReason2(pullRequest, repository, dependencies);
 }
-function ineligibleReason(pullRequest, repository, dependencies) {
+function ineligibleReason2(pullRequest, repository, dependencies) {
   if (pullRequest.state.toLowerCase() !== "open")
     return "Pull Request is not open";
   if (!pullRequest.draft) return "Pull Request is not a Draft";
@@ -15731,7 +16349,7 @@ function validateFixedReview(analysis, inspection) {
     throw new Error("fixed review result reports a failed validation command");
   }
 }
-async function finishWithoutPush(repository, pullRequestNumber, conversationCursor, reviewCursor, iterations, headSha, status, comments, dependencies) {
+async function finishWithoutPush2(repository, pullRequestNumber, conversationCursor, reviewCursor, iterations, headSha, status, comments, dependencies) {
   if (dependencies.apply) {
     await upsertReviewState(
       repository,
@@ -15770,7 +16388,7 @@ function reviewState(comments, dependencies) {
   return parseReviewFixState(findReviewFixComment(comments, botLogin));
 }
 function fingerprintComments(comments) {
-  return crypto2.createHash("sha256").update(
+  return crypto3.createHash("sha256").update(
     JSON.stringify(
       comments.map(({ source, comment }) => ({
         source,
@@ -15794,7 +16412,7 @@ function toFinding({ source, comment }) {
   return {
     source,
     commentId: comment.id,
-    body: truncate2(comment.body, 4e3),
+    body: truncateText(comment.body, 4e3),
     ...comment.htmlUrl ? { htmlUrl: comment.htmlUrl } : {},
     ...comment.createdAt ? { createdAt: comment.createdAt } : {},
     ...reviewComment?.path ? { path: reviewComment.path } : {},
@@ -15804,7 +16422,7 @@ function toFinding({ source, comment }) {
     ...reviewComment?.originalStartLine !== void 0 ? { originalStartLine: reviewComment.originalStartLine } : {},
     ...reviewComment?.side ? { side: reviewComment.side } : {},
     ...reviewComment?.startSide ? { startSide: reviewComment.startSide } : {},
-    ...reviewComment?.diffHunk ? { diffHunk: truncate2(reviewComment.diffHunk, 8e3) } : {},
+    ...reviewComment?.diffHunk ? { diffHunk: truncateText(reviewComment.diffHunk, 8e3) } : {},
     ...reviewComment?.commitId ? { commitId: reviewComment.commitId } : {},
     ...reviewComment?.originalCommitId ? { originalCommitId: reviewComment.originalCommitId } : {},
     ...reviewComment?.inReplyToId !== void 0 ? { inReplyToId: reviewComment.inReplyToId } : {},
@@ -15824,7 +16442,7 @@ function nextCursor(source, previous, comments) {
     previous
   );
 }
-function skipped(repository, pullRequestNumber, reason) {
+function skipped2(repository, pullRequestNumber, reason) {
   return { ok: true, skipped: true, reason, repository, pullRequestNumber };
 }
 function requireReviewIdentities(dependencies) {
@@ -15840,85 +16458,66 @@ function requireReviewIdentities(dependencies) {
     );
   }
 }
-function repositoryCloneUrl(serverUrl, repository) {
-  const base = new URL(serverUrl);
-  if (base.protocol !== "https:") {
-    throw new Error("GitHub server URL must use HTTPS");
+
+// src/runtime/target-binding.ts
+function assertBoundTarget(options) {
+  const expectedRepository = options.expectedRepository?.trim() ?? "";
+  const expectedTargetText = options.expectedTarget?.trim() ?? "";
+  if (!expectedRepository && !expectedTargetText) {
+    if (options.apply) throw new Error(options.errors.missing);
+    return;
   }
-  base.pathname = `${base.pathname.replace(/\/$/, "")}/${repository}.git`;
-  base.search = "";
-  base.hash = "";
-  return base.toString();
-}
-function sanitizeTitle(value) {
-  return value.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-}
-function assertAllowedRepository(repository, allowed) {
-  if (!allowed.trim())
-    throw new Error("Draft PR repository allowlist is required");
-  if (repository.trim().toLowerCase() !== allowed.trim().toLowerCase()) {
-    throw new Error("repository is outside the Draft PR allowlist");
+  if (!expectedRepository || !expectedTargetText) {
+    throw new Error(options.errors.incomplete);
   }
-}
-function truncate2(value, max) {
-  return value.length <= max ? value : value.slice(0, max);
+  const expectedTarget = Number(expectedTargetText);
+  if (!isProjectPath(expectedRepository) || !Number.isSafeInteger(expectedTarget) || expectedTarget <= 0) {
+    throw new Error(options.errors.invalid);
+  }
+  if (options.repository !== expectedRepository || options.targetNumber !== expectedTarget) {
+    throw new Error(
+      options.errors.mismatch(expectedRepository, expectedTarget)
+    );
+  }
 }
 
 // src/draft-pr/target.ts
 function assertBoundReviewTarget(repository, pullRequestNumber, apply, environment) {
-  const expectedRepository = environment.DRAFT_PR_EXPECTED_REPOSITORY?.trim() ?? "";
-  const expectedPullRequestText = environment.DRAFT_PR_EXPECTED_PULL_REQUEST?.trim() ?? "";
-  if (!expectedRepository && !expectedPullRequestText) {
-    if (apply) {
-      throw new Error(
-        "Draft PR review apply mode requires a scheduler-bound Pull Request target"
-      );
+  assertBoundTarget({
+    repository,
+    targetNumber: pullRequestNumber,
+    apply,
+    expectedRepository: environment.DRAFT_PR_EXPECTED_REPOSITORY,
+    expectedTarget: environment.DRAFT_PR_EXPECTED_PULL_REQUEST,
+    errors: {
+      missing: "Draft PR review apply mode requires a scheduler-bound Pull Request target",
+      incomplete: "incomplete scheduler-bound Draft PR review target",
+      invalid: "invalid scheduler-bound Draft PR review target",
+      mismatch: () => `requested Pull Request ${repository}#${pullRequestNumber} does not match the scheduler-bound review target`
     }
-    return;
-  }
-  if (!expectedRepository || !expectedPullRequestText) {
-    throw new Error("incomplete scheduler-bound Draft PR review target");
-  }
-  const expectedPullRequestNumber = Number(expectedPullRequestText);
-  if (!isProjectPath(expectedRepository) || !Number.isSafeInteger(expectedPullRequestNumber) || expectedPullRequestNumber <= 0) {
-    throw new Error("invalid scheduler-bound Draft PR review target");
-  }
-  if (repository !== expectedRepository || pullRequestNumber !== expectedPullRequestNumber) {
-    throw new Error(
-      `requested Pull Request ${repository}#${pullRequestNumber} does not match the scheduler-bound review target`
-    );
-  }
+  });
 }
 function assertBoundDraftPrTarget(repository, issueNumber, apply, environment) {
-  const expectedRepository = environment.DRAFT_PR_EXPECTED_REPOSITORY?.trim() ?? "";
-  const expectedIssueText = environment.DRAFT_PR_EXPECTED_ISSUE?.trim() ?? "";
-  if (!expectedRepository && !expectedIssueText) {
-    if (apply) {
-      throw new Error(
-        "Draft PR apply mode requires a scheduler-bound Issue target"
-      );
+  assertBoundTarget({
+    repository,
+    targetNumber: issueNumber,
+    apply,
+    expectedRepository: environment.DRAFT_PR_EXPECTED_REPOSITORY,
+    expectedTarget: environment.DRAFT_PR_EXPECTED_ISSUE,
+    errors: {
+      missing: "Draft PR apply mode requires a scheduler-bound Issue target",
+      incomplete: "incomplete scheduler-bound Draft PR target",
+      invalid: "invalid scheduler-bound Draft PR target",
+      mismatch: () => `requested Issue ${repository}#${issueNumber} does not match the scheduler-bound Draft PR target`
     }
-    return;
-  }
-  if (!expectedRepository || !expectedIssueText) {
-    throw new Error("incomplete scheduler-bound Draft PR target");
-  }
-  const expectedIssueNumber = Number(expectedIssueText);
-  if (!isProjectPath(expectedRepository) || !Number.isSafeInteger(expectedIssueNumber) || expectedIssueNumber <= 0) {
-    throw new Error("invalid scheduler-bound Draft PR target");
-  }
-  if (repository !== expectedRepository || issueNumber !== expectedIssueNumber) {
-    throw new Error(
-      `requested Issue ${repository}#${issueNumber} does not match the scheduler-bound Draft PR target`
-    );
-  }
+  });
 }
 
-// src/issue-triage/comment.ts
-import crypto3 from "node:crypto";
-var COMMENT_MARKER_PREFIX = "<!-- engineering-agent-workflows:issue-triage:v1";
+// src/issues/fingerprint.ts
+import crypto4 from "node:crypto";
+var ISSUE_FINGERPRINT_PATTERN = /^[0-9a-f]{20}$/;
 function issueFingerprint(issue2, comments = []) {
-  return crypto3.createHash("sha256").update(
+  return crypto4.createHash("sha256").update(
     JSON.stringify({
       title: issue2.title.trim(),
       body: issue2.body ?? "",
@@ -15929,6 +16528,12 @@ function issueFingerprint(issue2, comments = []) {
       }))
     })
   ).digest("hex").slice(0, 20);
+}
+
+// src/issues/managed-comments.ts
+var ISSUE_TRIAGE_COMMENT_PREFIX = "<!-- engineering-agent-workflows:issue-triage:v1";
+function isIssueTriageComment(body) {
+  return body.startsWith(ISSUE_TRIAGE_COMMENT_PREFIX);
 }
 
 // src/draft-pr/comment.ts
@@ -15991,7 +16596,7 @@ var draftPrAnalysisSchema = external_exports.object({
   notes: external_exports.array(external_exports.string().min(1).max(500)).max(8)
 });
 var draftPrSubmissionSchema = external_exports.object({
-  issueFingerprint: external_exports.string().regex(/^[0-9a-f]{20}$/),
+  issueFingerprint: external_exports.string().regex(ISSUE_FINGERPRINT_PATTERN),
   trigger: external_exports.enum(["ready", "approved"]),
   workspacePath: external_exports.string().min(1).max(2e3),
   branch: external_exports.string().min(1).max(250),
@@ -16002,9 +16607,9 @@ var draftPrSubmissionSchema = external_exports.object({
 
 // src/draft-pr/tool.ts
 async function prepareDraftPr(repository, issueNumber, trigger, dependencies) {
-  assertAllowedRepository2(repository, dependencies.allowedRepository);
+  assertAllowedRepository(repository, dependencies.allowedRepository);
   const issue2 = await dependencies.provider.getIssue(repository, issueNumber);
-  const reason = ineligibleReason2(issue2, trigger, dependencies.policy);
+  const reason = ineligibleReason3(issue2, trigger, dependencies.policy);
   if (reason) {
     return {
       ok: true,
@@ -16043,7 +16648,7 @@ async function prepareDraftPr(repository, issueNumber, trigger, dependencies) {
     preparedWorkspace = await dependencies.workspace.prepare({
       repository,
       issueNumber,
-      cloneUrl: repositoryCloneUrl2(dependencies.serverUrl, repository),
+      cloneUrl: repositoryCloneUrl(dependencies.serverUrl, repository),
       baseBranch,
       branch
     });
@@ -16088,7 +16693,7 @@ async function prepareDraftPr(repository, issueNumber, trigger, dependencies) {
   };
 }
 async function applyDraftPr(repository, issueNumber, submissionInput, dependencies) {
-  assertAllowedRepository2(repository, dependencies.allowedRepository);
+  assertAllowedRepository(repository, dependencies.allowedRepository);
   const submission = draftPrSubmissionSchema.parse(submissionInput);
   const [issue2, comments] = await Promise.all([
     dependencies.provider.getIssue(repository, issueNumber),
@@ -16161,7 +16766,7 @@ async function applyDraftPr(repository, issueNumber, submissionInput, dependenci
       inspection
     };
   }
-  const title = sanitizeTitle2(analysis.prTitle);
+  const title = sanitizeTitle(analysis.prTitle);
   const body = buildPullRequestBody(issueNumber, analysis);
   if (!dependencies.apply) {
     await dependencies.workspace.cleanup(repository, issueNumber);
@@ -16181,7 +16786,7 @@ async function applyDraftPr(repository, issueNumber, submissionInput, dependenci
     submission.workspacePath,
     submission.branch,
     title,
-    repositoryCloneUrl2(dependencies.serverUrl, repository)
+    repositoryCloneUrl(dependencies.serverUrl, repository)
   );
   const pullRequest = await dependencies.provider.createDraftPullRequest(
     repository,
@@ -16213,7 +16818,7 @@ async function applyDraftPr(repository, issueNumber, submissionInput, dependenci
   };
 }
 async function failDraftPr(repository, issueNumber, message, dependencies) {
-  assertAllowedRepository2(repository, dependencies.allowedRepository);
+  assertAllowedRepository(repository, dependencies.allowedRepository);
   try {
     if (dependencies.apply) {
       await transitionFailed(repository, issueNumber, [message], dependencies);
@@ -16229,7 +16834,7 @@ async function failDraftPr(repository, issueNumber, message, dependencies) {
     outcome: "failed"
   };
 }
-function ineligibleReason2(issue2, trigger, policy) {
+function ineligibleReason3(issue2, trigger, policy) {
   if (issue2.state.toLowerCase() !== "open") return "Issue is not open";
   if (hasAnyLabel(issue2.labels, policy.skipLabels)) {
     return "Issue has a configured skip label";
@@ -16373,11 +16978,14 @@ function selectContextComments(comments, botLogin) {
   const expectedBot = botLogin?.trim().toLowerCase();
   return comments.filter((comment) => {
     const managedBot = expectedBot && comment.user?.login.trim().toLowerCase() === expectedBot;
-    return !(managedBot && (comment.body.startsWith(DRAFT_PR_COMMENT_PREFIX) || comment.body.startsWith(COMMENT_MARKER_PREFIX)));
-  }).sort((left, right) => left.id - right.id).slice(-50).map((comment) => ({ ...comment, body: truncate3(comment.body, 4e3) }));
+    return !(managedBot && (comment.body.startsWith(DRAFT_PR_COMMENT_PREFIX) || isIssueTriageComment(comment.body)));
+  }).sort((left, right) => left.id - right.id).slice(-50).map((comment) => ({
+    ...comment,
+    body: truncateText(comment.body, 4e3)
+  }));
 }
 function validateImplementedAnalysis(analysis, inspection) {
-  if (!sanitizeTitle2(analysis.prTitle)) {
+  if (!sanitizeTitle(analysis.prTitle)) {
     throw new Error("implemented result requires a Pull Request title");
   }
   if (inspection.changedFiles.length === 0) {
@@ -16431,40 +17039,17 @@ function buildPullRequestBody(issueNumber, analysis) {
   );
   return lines.join("\n");
 }
-function sanitizeTitle2(value) {
-  return value.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-}
 function sanitizeLine2(value) {
   return value.replace(/<!--[\s\S]*?-->/g, "").replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 500);
 }
 function sanitizeCode(value) {
   return sanitizeLine2(value).replace(/`/g, "'");
 }
-function repositoryCloneUrl2(serverUrl, repository) {
-  const base = new URL(serverUrl);
-  if (base.protocol !== "https:") {
-    throw new Error("GitHub server URL must use HTTPS");
-  }
-  base.pathname = `${base.pathname.replace(/\/$/, "")}/${repository}.git`;
-  base.search = "";
-  base.hash = "";
-  return base.toString();
-}
 function requiredBotLogin(value) {
   const normalized = value?.trim();
   if (!normalized)
     throw new Error("Draft PR bot login is required in apply mode");
   return normalized;
-}
-function assertAllowedRepository2(repository, allowed) {
-  if (!allowed.trim())
-    throw new Error("Draft PR repository allowlist is required");
-  if (repository.trim().toLowerCase() !== allowed.trim().toLowerCase()) {
-    throw new Error("repository is outside the Draft PR allowlist");
-  }
-}
-function truncate3(value, max) {
-  return value.length <= max ? value : value.slice(0, max);
 }
 
 // src/draft-pr/main.ts
@@ -16507,7 +17092,7 @@ async function main() {
     apply,
     ...process.env.GITHUB_BOT_LOGIN ? { botLogin: process.env.GITHUB_BOT_LOGIN } : {},
     monkeyScanBotLogin: process.env.MONKEYSCAN_BOT_LOGIN?.trim() ?? "",
-    ...positiveInteger(process.env.MONKEYSCAN_BOT_USER_ID) ? { monkeyScanBotUserId: Number(process.env.MONKEYSCAN_BOT_USER_ID) } : {}
+    ...isPositiveInteger(process.env.MONKEYSCAN_BOT_USER_ID) ? { monkeyScanBotUserId: Number(process.env.MONKEYSCAN_BOT_USER_ID) } : {}
   };
   const result = options.command === "prepare" ? await prepareDraftPr(
     options.repository,
@@ -16518,7 +17103,7 @@ async function main() {
     options.repository,
     options.issueNumber,
     JSON.parse(
-      await readFile(options.analysisFile, "utf8")
+      await readFile2(options.analysisFile, "utf8")
     ),
     dependencies
   ) : options.command === "fail" ? await failDraftPr(
@@ -16534,10 +17119,10 @@ async function main() {
     options.repository,
     options.pullRequestNumber,
     JSON.parse(
-      await readFile(options.analysisFile, "utf8")
+      await readFile2(options.analysisFile, "utf8")
     ),
     dependencies
-  ) : await failReviewFix(
+  ) : options.command === "fail-review" ? await failReviewFix(
     options.repository,
     options.pullRequestNumber,
     options.conversationCursor ?? 0,
@@ -16545,30 +17130,43 @@ async function main() {
     options.iterations ?? 0,
     options.headSha ?? "",
     dependencies
+  ) : options.command === "prepare-ci" ? await prepareCiFix(
+    options.repository,
+    options.pullRequestNumber,
+    options.headSha ?? "",
+    options.checkSuiteId ?? 0,
+    dependencies
+  ) : options.command === "apply-ci" ? await applyCiFix(
+    options.repository,
+    options.pullRequestNumber,
+    JSON.parse(
+      await readFile2(options.analysisFile, "utf8")
+    ),
+    dependencies
+  ) : await failCiFix(
+    options.repository,
+    options.pullRequestNumber,
+    options.checkSuiteId ?? 0,
+    options.attempts ?? 0,
+    options.headSha ?? "",
+    dependencies
   );
   process.stdout.write(`${JSON.stringify(result, null, 2)}
 `);
 }
 async function loadPolicy() {
-  const candidates = [
-    fileURLToPath(new URL("../policy.json", import.meta.url)),
-    path2.resolve("agents/draft-pr/policy.json")
-  ];
-  let lastError;
-  for (const candidate of candidates) {
-    try {
-      return draftPrPolicySchema.parse(
-        JSON.parse(await readFile(candidate, "utf8"))
-      );
-    } catch (error51) {
-      lastError = error51;
-    }
-  }
-  throw new Error(`failed to load Draft PR policy: ${errorMessage(lastError)}`);
+  return loadJsonFromCandidates(
+    [
+      fileURLToPath(new URL("../policy.json", import.meta.url)),
+      path2.resolve("agents/draft-pr/policy.json")
+    ],
+    (value) => draftPrPolicySchema.parse(value),
+    "failed to load Draft PR policy"
+  );
 }
 function parseArguments(args) {
   const command = args.shift();
-  if (command !== "prepare" && command !== "apply" && command !== "fail" && command !== "list-review-targets" && command !== "prepare-review" && command !== "apply-review" && command !== "fail-review") {
+  if (command !== "prepare" && command !== "apply" && command !== "fail" && command !== "list-review-targets" && command !== "prepare-review" && command !== "apply-review" && command !== "fail-review" && command !== "prepare-ci" && command !== "apply-ci" && command !== "fail-ci") {
     throw new Error("invalid Draft PR tool command");
   }
   let repository = "";
@@ -16581,6 +17179,8 @@ function parseArguments(args) {
   let reviewCursor = 0;
   let iterations = 0;
   let headSha = "";
+  let checkSuiteId = 0;
+  let attempts = 0;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--repository") {
@@ -16607,6 +17207,10 @@ function parseArguments(args) {
       iterations = Number(requiredArgumentValue(args, ++index, argument));
     } else if (argument === "--head") {
       headSha = requiredArgumentValue(args, ++index, argument);
+    } else if (argument === "--check-suite") {
+      checkSuiteId = Number(requiredArgumentValue(args, ++index, argument));
+    } else if (argument === "--attempts") {
+      attempts = Number(requiredArgumentValue(args, ++index, argument));
     } else {
       throw new Error(`unknown argument: ${argument}`);
     }
@@ -16617,13 +17221,20 @@ function parseArguments(args) {
   if (["prepare", "apply", "fail"].includes(command) && (!Number.isSafeInteger(issueNumber) || issueNumber <= 0)) {
     throw new Error("--issue must be a positive integer");
   }
-  if (["prepare-review", "apply-review", "fail-review"].includes(command) && (!Number.isSafeInteger(pullRequestNumber) || pullRequestNumber <= 0)) {
+  if ([
+    "prepare-review",
+    "apply-review",
+    "fail-review",
+    "prepare-ci",
+    "apply-ci",
+    "fail-ci"
+  ].includes(command) && (!Number.isSafeInteger(pullRequestNumber) || pullRequestNumber <= 0)) {
     throw new Error("--pull-request must be a positive integer");
   }
   if (command === "prepare" && trigger !== "ready" && trigger !== "approved") {
     throw new Error("prepare requires --trigger ready or approved");
   }
-  if ((command === "apply" || command === "apply-review") && !analysisFile) {
+  if ((command === "apply" || command === "apply-review" || command === "apply-ci") && !analysisFile) {
     throw new Error(`${command} requires --analysis`);
   }
   return {
@@ -16637,23 +17248,10 @@ function parseArguments(args) {
     ...conversationCursor ? { conversationCursor } : {},
     ...reviewCursor ? { reviewCursor } : {},
     ...iterations ? { iterations } : {},
-    ...headSha ? { headSha } : {}
+    ...headSha ? { headSha } : {},
+    ...Number.isSafeInteger(checkSuiteId) && checkSuiteId > 0 ? { checkSuiteId } : {},
+    ...Number.isSafeInteger(attempts) && attempts >= 0 ? { attempts } : {}
   };
-}
-function positiveInteger(value) {
-  const number4 = Number(value?.trim());
-  return Number.isSafeInteger(number4) && number4 > 0;
-}
-function requiredArgumentValue(args, index, name) {
-  const value = args[index]?.trim();
-  if (!value) throw new Error(`${name} requires a value`);
-  return value;
-}
-function envBoolean(value) {
-  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
-}
-function errorMessage(error51) {
-  return error51 instanceof Error ? error51.message : String(error51);
 }
 main().catch((error51) => {
   process.stderr.write(`draft-pr failed: ${errorMessage(error51)}

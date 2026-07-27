@@ -60,3 +60,27 @@ export interface GitHubPullRequestAPI {
   head: { ref: string; sha?: string; repo?: { full_name: string } | null };
   base: { ref: string };
 }
+
+export interface GitHubCheckRunAPI {
+  id: number;
+  name: string;
+  status: string;
+  conclusion?: string | null;
+  html_url?: string;
+  check_suite?: { id?: number } | null;
+  output?: {
+    title?: string | null;
+    summary?: string | null;
+    text?: string | null;
+  };
+}
+
+export interface GitHubCheckRunAnnotationAPI {
+  path: string;
+  start_line: number;
+  end_line: number;
+  annotation_level: string;
+  message: string;
+  title?: string | null;
+  raw_details?: string | null;
+}

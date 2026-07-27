@@ -1,15 +1,15 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { GitHubClient } from "./github/client.js";
-import { GitLabClient } from "./gitlab/client.js";
-import { isProjectPath } from "./issues/types.js";
-import {
-  triagePolicySchema,
-  type TriagePolicy,
-} from "./issue-triage/policy.js";
-import { assertBoundIssueTarget } from "./issue-triage/target.js";
-import { applyIssueTriage, prepareIssueTriage } from "./issue-triage/tool.js";
+import { GitHubClient } from "../github/client.js";
+import { GitLabClient } from "../gitlab/client.js";
+import { isProjectPath } from "../issues/types.js";
+import { envBoolean, requiredArgumentValue } from "../runtime/cli.js";
+import { errorMessage } from "../runtime/errors.js";
+import { loadJsonFromCandidates } from "../runtime/load-json.js";
+import { triagePolicySchema, type TriagePolicy } from "./policy.js";
+import { assertBoundIssueTarget } from "./target.js";
+import { applyIssueTriage, prepareIssueTriage } from "./tool.js";
 
 interface CLIOptions {
   command: "prepare" | "apply";
@@ -81,22 +81,13 @@ async function main(): Promise<void> {
 }
 
 async function loadPolicy(): Promise<TriagePolicy> {
-  const candidates = [
-    fileURLToPath(new URL("../policy.json", import.meta.url)),
-    path.resolve("agents/issue-triage/policy.json"),
-  ];
-  let lastError: unknown;
-  for (const candidate of candidates) {
-    try {
-      return triagePolicySchema.parse(
-        JSON.parse(await readFile(candidate, "utf8")) as unknown,
-      );
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw new Error(
-    `failed to load issue triage policy: ${errorMessage(lastError)}`,
+  return loadJsonFromCandidates(
+    [
+      fileURLToPath(new URL("../policy.json", import.meta.url)),
+      path.resolve("agents/issue-triage/policy.json"),
+    ],
+    (value) => triagePolicySchema.parse(value),
+    "failed to load issue triage policy",
   );
 }
 
@@ -139,24 +130,6 @@ function parseArguments(args: string[]): CLIOptions {
     issueNumber,
     ...(analysisFile ? { analysisFile } : {}),
   };
-}
-
-function requiredArgumentValue(
-  args: string[],
-  index: number,
-  name: string,
-): string {
-  const value = args[index]?.trim();
-  if (!value) throw new Error(`${name} requires a value`);
-  return value;
-}
-
-function envBoolean(value: string | undefined): boolean {
-  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 main().catch((error: unknown) => {

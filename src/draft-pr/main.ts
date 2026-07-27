@@ -3,6 +3,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { GitHubClient } from "../github/client.js";
 import { isProjectPath } from "../issues/types.js";
+import {
+  envBoolean,
+  isPositiveInteger,
+  requiredArgumentValue,
+} from "../runtime/cli.js";
+import { errorMessage } from "../runtime/errors.js";
+import { loadJsonFromCandidates } from "../runtime/load-json.js";
+import { applyCiFix, failCiFix, prepareCiFix } from "./ci-tool.js";
 import { draftPrPolicySchema, type DraftPrPolicy } from "./policy.js";
 import {
   applyReviewFix,
@@ -22,7 +30,10 @@ interface CLIOptions {
     | "list-review-targets"
     | "prepare-review"
     | "apply-review"
-    | "fail-review";
+    | "fail-review"
+    | "prepare-ci"
+    | "apply-ci"
+    | "fail-ci";
   repository: string;
   issueNumber?: number;
   pullRequestNumber?: number;
@@ -33,6 +44,8 @@ interface CLIOptions {
   reviewCursor?: number;
   iterations?: number;
   headSha?: string;
+  checkSuiteId?: number;
+  attempts?: number;
 }
 
 async function main(): Promise<void> {
@@ -85,7 +98,7 @@ async function main(): Promise<void> {
       ? { botLogin: process.env.GITHUB_BOT_LOGIN }
       : {}),
     monkeyScanBotLogin: process.env.MONKEYSCAN_BOT_LOGIN?.trim() ?? "",
-    ...(positiveInteger(process.env.MONKEYSCAN_BOT_USER_ID)
+    ...(isPositiveInteger(process.env.MONKEYSCAN_BOT_USER_ID)
       ? { monkeyScanBotUserId: Number(process.env.MONKEYSCAN_BOT_USER_ID) }
       : {}),
   };
@@ -131,34 +144,53 @@ async function main(): Promise<void> {
                     ) as unknown,
                     dependencies,
                   )
-                : await failReviewFix(
-                    options.repository,
-                    options.pullRequestNumber!,
-                    options.conversationCursor ?? 0,
-                    options.reviewCursor ?? 0,
-                    options.iterations ?? 0,
-                    options.headSha ?? "",
-                    dependencies,
-                  );
+                : options.command === "fail-review"
+                  ? await failReviewFix(
+                      options.repository,
+                      options.pullRequestNumber!,
+                      options.conversationCursor ?? 0,
+                      options.reviewCursor ?? 0,
+                      options.iterations ?? 0,
+                      options.headSha ?? "",
+                      dependencies,
+                    )
+                  : options.command === "prepare-ci"
+                    ? await prepareCiFix(
+                        options.repository,
+                        options.pullRequestNumber!,
+                        options.headSha ?? "",
+                        options.checkSuiteId ?? 0,
+                        dependencies,
+                      )
+                    : options.command === "apply-ci"
+                      ? await applyCiFix(
+                          options.repository,
+                          options.pullRequestNumber!,
+                          JSON.parse(
+                            await readFile(options.analysisFile!, "utf8"),
+                          ) as unknown,
+                          dependencies,
+                        )
+                      : await failCiFix(
+                          options.repository,
+                          options.pullRequestNumber!,
+                          options.checkSuiteId ?? 0,
+                          options.attempts ?? 0,
+                          options.headSha ?? "",
+                          dependencies,
+                        );
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
 async function loadPolicy(): Promise<DraftPrPolicy> {
-  const candidates = [
-    fileURLToPath(new URL("../policy.json", import.meta.url)),
-    path.resolve("agents/draft-pr/policy.json"),
-  ];
-  let lastError: unknown;
-  for (const candidate of candidates) {
-    try {
-      return draftPrPolicySchema.parse(
-        JSON.parse(await readFile(candidate, "utf8")) as unknown,
-      );
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw new Error(`failed to load Draft PR policy: ${errorMessage(lastError)}`);
+  return loadJsonFromCandidates(
+    [
+      fileURLToPath(new URL("../policy.json", import.meta.url)),
+      path.resolve("agents/draft-pr/policy.json"),
+    ],
+    (value) => draftPrPolicySchema.parse(value),
+    "failed to load Draft PR policy",
+  );
 }
 
 function parseArguments(args: string[]): CLIOptions {
@@ -170,7 +202,10 @@ function parseArguments(args: string[]): CLIOptions {
     command !== "list-review-targets" &&
     command !== "prepare-review" &&
     command !== "apply-review" &&
-    command !== "fail-review"
+    command !== "fail-review" &&
+    command !== "prepare-ci" &&
+    command !== "apply-ci" &&
+    command !== "fail-ci"
   ) {
     throw new Error("invalid Draft PR tool command");
   }
@@ -184,6 +219,8 @@ function parseArguments(args: string[]): CLIOptions {
   let reviewCursor = 0;
   let iterations = 0;
   let headSha = "";
+  let checkSuiteId = 0;
+  let attempts = 0;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--repository") {
@@ -210,6 +247,10 @@ function parseArguments(args: string[]): CLIOptions {
       iterations = Number(requiredArgumentValue(args, ++index, argument));
     } else if (argument === "--head") {
       headSha = requiredArgumentValue(args, ++index, argument);
+    } else if (argument === "--check-suite") {
+      checkSuiteId = Number(requiredArgumentValue(args, ++index, argument));
+    } else if (argument === "--attempts") {
+      attempts = Number(requiredArgumentValue(args, ++index, argument));
     } else {
       throw new Error(`unknown argument: ${argument}`);
     }
@@ -224,7 +265,14 @@ function parseArguments(args: string[]): CLIOptions {
     throw new Error("--issue must be a positive integer");
   }
   if (
-    ["prepare-review", "apply-review", "fail-review"].includes(command) &&
+    [
+      "prepare-review",
+      "apply-review",
+      "fail-review",
+      "prepare-ci",
+      "apply-ci",
+      "fail-ci",
+    ].includes(command) &&
     (!Number.isSafeInteger(pullRequestNumber) || pullRequestNumber <= 0)
   ) {
     throw new Error("--pull-request must be a positive integer");
@@ -232,7 +280,12 @@ function parseArguments(args: string[]): CLIOptions {
   if (command === "prepare" && trigger !== "ready" && trigger !== "approved") {
     throw new Error("prepare requires --trigger ready or approved");
   }
-  if ((command === "apply" || command === "apply-review") && !analysisFile) {
+  if (
+    (command === "apply" ||
+      command === "apply-review" ||
+      command === "apply-ci") &&
+    !analysisFile
+  ) {
     throw new Error(`${command} requires --analysis`);
   }
   return {
@@ -247,30 +300,11 @@ function parseArguments(args: string[]): CLIOptions {
     ...(reviewCursor ? { reviewCursor } : {}),
     ...(iterations ? { iterations } : {}),
     ...(headSha ? { headSha } : {}),
+    ...(Number.isSafeInteger(checkSuiteId) && checkSuiteId > 0
+      ? { checkSuiteId }
+      : {}),
+    ...(Number.isSafeInteger(attempts) && attempts >= 0 ? { attempts } : {}),
   };
-}
-
-function positiveInteger(value: string | undefined): boolean {
-  const number = Number(value?.trim());
-  return Number.isSafeInteger(number) && number > 0;
-}
-
-function requiredArgumentValue(
-  args: string[],
-  index: number,
-  name: string,
-): string {
-  const value = args[index]?.trim();
-  if (!value) throw new Error(`${name} requires a value`);
-  return value;
-}
-
-function envBoolean(value: string | undefined): boolean {
-  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 main().catch((error: unknown) => {

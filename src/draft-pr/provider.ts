@@ -1,35 +1,34 @@
 import type { IssuesClient } from "../issues/client.js";
-import type { IssueUser } from "../issues/types.js";
+import type {
+  PullRequest,
+  PullRequestReviewComment,
+} from "../pull-requests/types.js";
 
-export interface DraftPullRequest {
-  number: number;
-  url: string;
-  state: string;
-  draft: boolean;
-  head: string;
-  headSha?: string;
-  headRepository?: string;
-  base: string;
+export type DraftPullRequest = PullRequest;
+export type { PullRequestReviewComment } from "../pull-requests/types.js";
+
+export interface CheckRunAnnotation {
+  path: string;
+  startLine: number;
+  endLine: number;
+  level: string;
+  message: string;
+  title?: string;
+  rawDetails?: string;
 }
 
-export interface PullRequestReviewComment {
+export interface CheckRun {
   id: number;
-  body: string;
-  user?: IssueUser;
+  checkSuiteId: number;
+  name: string;
+  status: string;
+  conclusion?: string;
   htmlUrl?: string;
-  createdAt?: string;
-  path: string;
-  line?: number;
-  originalLine?: number;
-  startLine?: number;
-  originalStartLine?: number;
-  side?: string;
-  startSide?: string;
-  diffHunk?: string;
-  commitId?: string;
-  originalCommitId?: string;
-  inReplyToId?: number;
-  pullRequestReviewId?: number;
+  output: {
+    title: string;
+    summary: string;
+    text: string;
+  };
 }
 
 export interface DraftPrProvider extends IssuesClient {
@@ -51,4 +50,12 @@ export interface DraftPrProvider extends IssuesClient {
     repository: string,
     input: { title: string; body: string; head: string; base: string },
   ): Promise<DraftPullRequest>;
+}
+
+export interface CiFixProvider extends DraftPrProvider {
+  listCheckRuns(repository: string, ref: string): Promise<CheckRun[]>;
+  listCheckRunAnnotations(
+    repository: string,
+    checkRunId: number,
+  ): Promise<CheckRunAnnotation[]>;
 }

@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import type { IssueComment } from "../issues/types.js";
+import { errorMessage } from "../runtime/errors.js";
+import { truncateText } from "../runtime/text.js";
 import {
   buildReviewFixComment,
   findReviewFixComment,
@@ -13,6 +15,11 @@ import type {
   DraftPullRequest,
   PullRequestReviewComment,
 } from "./provider.js";
+import {
+  assertAllowedRepository,
+  repositoryCloneUrl,
+  sanitizeTitle,
+} from "./repository.js";
 import {
   reviewFixSubmissionSchema,
   type ReviewCommentSource,
@@ -672,7 +679,7 @@ function toFinding({ source, comment }: SourcedComment): ReviewFinding {
   return {
     source,
     commentId: comment.id,
-    body: truncate(comment.body, 4000),
+    body: truncateText(comment.body, 4000),
     ...(comment.htmlUrl ? { htmlUrl: comment.htmlUrl } : {}),
     ...(comment.createdAt ? { createdAt: comment.createdAt } : {}),
     ...(reviewComment?.path ? { path: reviewComment.path } : {}),
@@ -689,7 +696,7 @@ function toFinding({ source, comment }: SourcedComment): ReviewFinding {
     ...(reviewComment?.side ? { side: reviewComment.side } : {}),
     ...(reviewComment?.startSide ? { startSide: reviewComment.startSide } : {}),
     ...(reviewComment?.diffHunk
-      ? { diffHunk: truncate(reviewComment.diffHunk, 8000) }
+      ? { diffHunk: truncateText(reviewComment.diffHunk, 8000) }
       : {}),
     ...(reviewComment?.commitId ? { commitId: reviewComment.commitId } : {}),
     ...(reviewComment?.originalCommitId
@@ -757,39 +764,4 @@ function requireReviewIdentities(dependencies: ReviewFixDependencies): void {
       "MonkeyScan bot and Draft PR workflow bot must be different identities",
     );
   }
-}
-
-function repositoryCloneUrl(serverUrl: string, repository: string): string {
-  const base = new URL(serverUrl);
-  if (base.protocol !== "https:") {
-    throw new Error("GitHub server URL must use HTTPS");
-  }
-  base.pathname = `${base.pathname.replace(/\/$/, "")}/${repository}.git`;
-  base.search = "";
-  base.hash = "";
-  return base.toString();
-}
-
-function sanitizeTitle(value: string): string {
-  return value
-    .replace(/[\r\n]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
-}
-
-function assertAllowedRepository(repository: string, allowed: string): void {
-  if (!allowed.trim())
-    throw new Error("Draft PR repository allowlist is required");
-  if (repository.trim().toLowerCase() !== allowed.trim().toLowerCase()) {
-    throw new Error("repository is outside the Draft PR allowlist");
-  }
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function truncate(value: string, max: number): string {
-  return value.length <= max ? value : value.slice(0, max);
 }

@@ -88,6 +88,23 @@ the diff crosses the existing approval gates. MonkeyScan comments are untrusted
 findings: the Agent must verify each one against code and cannot edit, reply to,
 or resolve scanner review threads.
 
+### CI failure fixes
+
+The Draft PR Agent also listens for failed `check_suite.completed` events on an
+open Agent-managed `codex/issue-*` Pull Request, whether it is still a Draft or
+has been marked ready. The deterministic boundary confirms the allowlisted head
+repository, current head SHA, suite ID, managed branch, and failed check runs
+through the GitHub Checks API before starting an Agent.
+
+All supported failures in that suite are handled as one batch. The Agent gets
+bounded check output and annotations, but no provider credential or raw Actions
+log archive; it must reproduce and verify the failure in the prepared checkout.
+Before a push, the boundary refetches and fingerprints the failures, verifies
+that the PR head has not moved, inspects the uncommitted diff, and applies the
+same secret, size, risk, and sensitive-path gates used by other fixes. A managed
+PR comment records the suite, head SHA, status, and attempt count. Automatic CI
+fixes stop after three attempts and never approve or merge the Pull Request.
+
 ### End-to-end example
 
 Assume a reporter opens Issue `#439`: “Deletion recovery leaves `LastError`
@@ -100,6 +117,7 @@ sequenceDiagram
     participant Triage as Issue Triage Agent
     participant Draft as Draft PR Agent
     participant Boundary as Trusted Git / Provider Boundary
+    participant CI as GitHub Checks / CI
     participant Scan as MonkeyScan
 
     Human->>GitHub: Open Issue #439
@@ -111,6 +129,11 @@ sequenceDiagram
     Boundary->>Draft: Fresh checkout in new sandbox
     Draft-->>Boundary: Uncommitted implementation + tests + JSON result
     Boundary->>GitHub: Validate, commit, push codex/issue-439,<br/>open Draft PR, add agent:pr-open
+    CI->>GitHub: Coverage gate fails
+    GitHub->>Boundary: check_suite.completed
+    Boundary->>Draft: One fix_ci run with verified failed checks
+    Draft-->>Boundary: One coherent uncommitted CI fix + per-check results
+    Boundary->>GitHub: Revalidate suite and head,<br/>create one commit, push same PR branch
     Scan->>GitHub: Submit multiple inline Review Comments
     GitHub->>Boundary: review/review_comment webhooks
     Boundary->>Draft: One fix_review run with all pending findings
@@ -136,19 +159,24 @@ Concretely:
    path or reports high risk, no PR is created. The Issue moves to
    `agent:needs-approval`; a maintainer must inspect the disclosed risk and add
    `agent:approved` before the Agent may rerun that scope.
-5. **Automatic MonkeyScan batch:** MonkeyScan may publish several Conversation
+5. **Automatic CI failure batch:** when a completed check suite fails, the
+   workflow verifies the current PR head and retrieves the suite's failed checks
+   and annotations. One `fix_ci` run may produce at most one validated commit
+   and push, which triggers CI again on the new head. Stale-head and successful
+   suite events are ignored.
+6. **Automatic MonkeyScan batch:** MonkeyScan may publish several Conversation
    or inline Review Comments. The workflow collects pending MonkeyScan findings
    up to the configured batch limit (currently 50), sorts them deterministically,
    and gives them to one `fix_review` run. A valid result produces at most one
    commit and one push to the existing PR branch. Overflow or a comment that
    arrives after the batch snapshot is picked up by its webhook or the
    one-minute reconciliation pass.
-6. **Conditional human scanner intervention:** automatic review fixes stop
-   after three batches, on conflicting findings, on approval-gated risk, or
-   when validation cannot establish a safe fix. A maintainer then decides
-   whether to edit the PR, request another change, or accept the remaining
-   finding. The Agent does not resolve MonkeyScan threads.
-7. **Human finishes the PR:** a maintainer reviews the final diff and checks,
+7. **Conditional human intervention:** automatic CI and review fixes stop after
+   three batches, on conflicting findings, on approval-gated risk, or when
+   validation cannot establish a safe fix. A maintainer then decides whether to
+   edit the PR, request another change, or accept the remaining finding. The
+   Agent does not resolve MonkeyScan threads.
+8. **Human finishes the PR:** a maintainer reviews the final diff and checks,
    resolves or accepts the review conversations, marks the Draft PR ready, and
    merges it under the repository's normal protection rules. These final PR
    actions are intentionally outside the Agent workflow.
@@ -156,7 +184,8 @@ Concretely:
 Human intervention points are therefore: optional correction or `skip-triage`
 during triage; required `agent:ready` before implementation; conditional
 `agent:approved` for gated Issue implementation; conditional manual handling of
-stopped MonkeyScan fixes; and required final PR review, readiness, and merge.
+stopped CI or MonkeyScan fixes; and required final PR review, readiness, and
+merge.
 
 ## Label ownership
 
@@ -225,15 +254,17 @@ For the Draft PR workflow, it additionally needs:
 
 - Contents: read and write
 - Pull requests: read and write
+- Checks: read
 
 A classic GitLab access token needs `api` scope. For GitLab, enable **Issues
 events** and **Comments** and map them to `webhook.gitlab.issue` and
 `webhook.gitlab.note`. For GitHub, enable **Issues**, **Issue comments**, **Pull
-request reviews**, and **Pull request review comments**. Map them to
+request reviews**, **Pull request review comments**, and **Check suites**. Map them to
 `webhook.github.issues`, `webhook.github.issue_comment`,
 `webhook.github.pull_request_review`, and
-`webhook.github.pull_request_review_comment`. Pull Request payloads delivered on
-the Issues topic are ignored.
+`webhook.github.pull_request_review_comment`, and
+`webhook.github.check_suite`. Pull Request payloads delivered on the Issues
+topic are ignored.
 
 Webhook secrets authenticate inbound deliveries. `GITLAB_TOKEN` and
 `GITHUB_TOKEN` are separate API credentials; never reuse a webhook secret as an
@@ -254,7 +285,7 @@ API token.
 | `ISSUE_TRIAGE_MODEL`          | No                               | Issue Triage model override                                        |
 | `ISSUE_TRIAGE_APPLY`          | No                               | `1` enables triage writes; defaults to `0`                         |
 | `DRAFT_PR_MODEL`              | No                               | Draft PR model override                                            |
-| `DRAFT_PR_APPLY`              | No                               | `1` enables claims, push, and Draft PR creation; defaults to `0`   |
+| `DRAFT_PR_APPLY`              | No                               | `1` enables managed comments, pushes, and PR creation              |
 | `DRAFT_PR_ALLOWED_REPOSITORY` | Yes                              | Exact Draft PR repository allowlist                                |
 | `DRAFT_PR_GIT_AUTHOR_NAME`    | Apply mode                       | Deterministic commit author name                                   |
 | `DRAFT_PR_GIT_AUTHOR_EMAIL`   | Apply mode                       | Deterministic commit author email                                  |
@@ -299,15 +330,17 @@ Manual apply mode additionally requires matching
 5. Add the settings from `deploy/daemon.env.example` to the daemon environment.
    Both GitHub workflows share `webhook.github.issues`; each loader filters its
    own actions and labels. The example permits four concurrent GitHub Issue and
-   comment deliveries; per-Issue and per-PR locks serialize the same target.
+   comment and check-suite deliveries; per-Issue and per-PR locks serialize the
+   same target.
 6. Run `agent-compose config --quiet`, then `agent-compose up`.
 7. Send the fixtures under `examples/`, inspect dry-run results, then enable each
    apply variable independently.
 
-Only one Draft PR run may hold an Issue workspace lock. Locks older than four
-hours are treated as stale. A normal terminal result removes the workspace and
-lock. If a process is killed, inspect the corresponding agent-compose run before
-removing a stale lock or retrying.
+Only one Draft PR run may hold an Issue workspace lock, and review/CI fixes
+share one lock per Pull Request. Locks older than four hours are treated as
+stale. A normal terminal result removes the workspace and lock. If a process is
+killed, inspect the corresponding agent-compose run before removing a stale
+lock or retrying.
 
 If Git push succeeds but GitHub Draft PR creation fails, the remote
 `codex/issue-<number>` branch is intentionally preserved and the Issue moves to

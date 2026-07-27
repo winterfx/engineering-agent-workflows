@@ -4,10 +4,20 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// src/main.ts
-import { readFile } from "node:fs/promises";
+// src/issue-triage/main.ts
+import { readFile as readFile2 } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+// src/issues/search.ts
+function issueSearchText(title) {
+  return title.replace(/^\[[^\]]+\]\s*:?\s*/, "").replace(/["'`:+(){}[\]\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+}
+
+// src/runtime/text.ts
+function truncateText(value, max) {
+  return value.length <= max ? value : value.slice(0, max);
+}
 
 // src/github/client.ts
 var GitHubClient = class {
@@ -33,7 +43,7 @@ var GitHubClient = class {
     return normalizeIssue(issue2);
   }
   async searchCandidates(repository, issue2, limit) {
-    const title = searchText(issue2.title);
+    const title = issueSearchText(issue2.title);
     if (!title) return [];
     const query = new URLSearchParams({
       q: `repo:${repository} is:issue in:title ${title}`,
@@ -48,7 +58,7 @@ var GitHubClient = class {
     ).slice(0, limit).map((candidate) => ({
       number: candidate.number,
       title: candidate.title,
-      body: truncate(candidate.body ?? "", 4e3),
+      body: truncateText(candidate.body ?? "", 4e3),
       state: candidate.state,
       labels: labelNames(candidate.labels),
       url: candidate.html_url
@@ -114,6 +124,35 @@ var GitHubClient = class {
       );
       comments.push(...batch.map(normalizeReviewComment));
       if (batch.length < 100) return comments;
+    }
+  }
+  async listCheckRuns(repository, ref) {
+    if (!/^[0-9a-f]{40}$/.test(ref)) {
+      throw new Error("invalid GitHub check run ref");
+    }
+    const runs = [];
+    for (let page = 1; ; page += 1) {
+      const value = await this.#request(
+        "GET",
+        `/repos/${repositoryPath(repository)}/commits/${ref}/check-runs?per_page=100&page=${page}`
+      );
+      const batch = value.check_runs ?? [];
+      runs.push(...batch.map(normalizeCheckRun));
+      if (batch.length < 100) return runs;
+    }
+  }
+  async listCheckRunAnnotations(repository, checkRunId) {
+    if (!Number.isSafeInteger(checkRunId) || checkRunId <= 0) {
+      throw new Error("invalid GitHub check run ID");
+    }
+    const annotations = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.#request(
+        "GET",
+        `/repos/${repositoryPath(repository)}/check-runs/${checkRunId}/annotations?per_page=100&page=${page}`
+      );
+      annotations.push(...batch.map(normalizeCheckRunAnnotation));
+      if (batch.length < 100) return annotations;
     }
   }
   async listOpenPullRequestsByHead(repository, branch) {
@@ -249,6 +288,36 @@ function normalizeReviewComment(comment) {
     ...comment.pull_request_review_id !== void 0 ? { pullRequestReviewId: comment.pull_request_review_id } : {}
   };
 }
+function normalizeCheckRun(value) {
+  const checkSuiteId = value.check_suite?.id;
+  if (!Number.isSafeInteger(checkSuiteId) || checkSuiteId <= 0) {
+    throw new Error(`GitHub check run ${value.id} has no valid check suite ID`);
+  }
+  return {
+    id: value.id,
+    checkSuiteId,
+    name: truncateText(value.name ?? "", 300),
+    status: value.status,
+    ...value.conclusion ? { conclusion: value.conclusion } : {},
+    ...value.html_url ? { htmlUrl: value.html_url } : {},
+    output: {
+      title: truncateText(value.output?.title ?? "", 1e3),
+      summary: truncateText(value.output?.summary ?? "", 8e3),
+      text: truncateText(value.output?.text ?? "", 8e3)
+    }
+  };
+}
+function normalizeCheckRunAnnotation(value) {
+  return {
+    path: truncateText(value.path ?? "", 1e3),
+    startLine: value.start_line,
+    endLine: value.end_line,
+    level: truncateText(value.annotation_level ?? "", 50),
+    message: truncateText(value.message ?? "", 2e3),
+    ...value.title ? { title: truncateText(value.title, 500) } : {},
+    ...value.raw_details ? { rawDetails: truncateText(value.raw_details, 4e3) } : {}
+  };
+}
 function normalizeUser(user) {
   return {
     login: user.login,
@@ -263,16 +332,10 @@ function normalizeColor(color) {
   const normalized = color.trim().replace(/^#/, "");
   return /^[0-9a-f]{6}$/i.test(normalized) ? normalized : "ededed";
 }
-function searchText(title) {
-  return title.replace(/^\[[^\]]+\]\s*:?\s*/, "").replace(/["'`:+(){}[\]\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-}
-function truncate(value, max) {
-  return value.length <= max ? value : value.slice(0, max);
-}
 async function responseError(method, path2, response) {
   const text = await response.text().catch(() => "");
   return new Error(
-    `GitHub API ${method} ${path2} failed with HTTP ${response.status}: ${truncate(text, 1e3)}`
+    `GitHub API ${method} ${path2} failed with HTTP ${response.status}: ${truncateText(text, 1e3)}`
   );
 }
 
@@ -302,7 +365,7 @@ var GitLabClient = class {
     return normalizeIssue2(issue2);
   }
   async searchCandidates(project, issue2, limit) {
-    const title = searchText2(issue2.title);
+    const title = issueSearchText(issue2.title);
     if (!title) return [];
     const query = new URLSearchParams({
       search: title,
@@ -318,7 +381,7 @@ var GitLabClient = class {
     return candidates.filter((candidate) => candidate.iid !== issue2.number).slice(0, limit).map((candidate) => ({
       number: candidate.iid,
       title: candidate.title,
-      body: truncate2(candidate.description ?? "", 4e3),
+      body: truncateText(candidate.description ?? "", 4e3),
       state: candidate.state,
       labels: candidate.labels,
       url: candidate.web_url
@@ -444,17 +507,40 @@ function normalizeColor2(color) {
   const normalized = color.trim().replace(/^#/, "");
   return `#${/^[0-9a-f]{6}$/i.test(normalized) ? normalized : "ededed"}`;
 }
-function searchText2(title) {
-  return title.replace(/^\[[^\]]+\]\s*:?\s*/, "").replace(/["'`:+(){}[\]\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-}
-function truncate2(value, max) {
-  return value.length <= max ? value : value.slice(0, max);
-}
 async function responseError2(method, path2, response) {
   const text = await response.text().catch(() => "");
   return new Error(
-    `GitLab API ${method} ${path2} failed with HTTP ${response.status}: ${truncate2(text, 1e3)}`
+    `GitLab API ${method} ${path2} failed with HTTP ${response.status}: ${truncateText(text, 1e3)}`
   );
+}
+
+// src/runtime/cli.ts
+function requiredArgumentValue(args, index, name) {
+  const value = args[index]?.trim();
+  if (!value) throw new Error(`${name} requires a value`);
+  return value;
+}
+function envBoolean(value) {
+  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
+}
+
+// src/runtime/errors.ts
+function errorMessage(error51) {
+  return error51 instanceof Error ? error51.message : String(error51);
+}
+
+// src/runtime/load-json.ts
+import { readFile } from "node:fs/promises";
+async function loadJsonFromCandidates(candidates, parse3, failureMessage) {
+  let lastError;
+  for (const candidate of candidates) {
+    try {
+      return parse3(JSON.parse(await readFile(candidate, "utf8")));
+    } catch (error51) {
+      lastError = error51;
+    }
+  }
+  throw new Error(`${failureMessage}: ${errorMessage(lastError)}`);
 }
 
 // node_modules/zod/v4/classic/external.js
@@ -15079,35 +15165,48 @@ function mergeManagedLabels(existing, desired, managedPrefixes) {
   return [.../* @__PURE__ */ new Set([...preserved, ...desired])];
 }
 
-// src/issue-triage/target.ts
-function assertBoundIssueTarget(repository, issueNumber, apply, environment) {
-  const expectedRepository = environment.ISSUE_TRIAGE_EXPECTED_REPOSITORY?.trim() ?? "";
-  const expectedIssueText = environment.ISSUE_TRIAGE_EXPECTED_ISSUE?.trim() ?? "";
-  if (!expectedRepository && !expectedIssueText) {
-    if (apply) {
-      throw new Error(
-        "apply mode requires a scheduler-bound Issue target; set ISSUE_TRIAGE_EXPECTED_REPOSITORY and ISSUE_TRIAGE_EXPECTED_ISSUE"
-      );
-    }
+// src/runtime/target-binding.ts
+function assertBoundTarget(options) {
+  const expectedRepository = options.expectedRepository?.trim() ?? "";
+  const expectedTargetText = options.expectedTarget?.trim() ?? "";
+  if (!expectedRepository && !expectedTargetText) {
+    if (options.apply) throw new Error(options.errors.missing);
     return;
   }
-  if (!expectedRepository || !expectedIssueText) {
-    throw new Error("incomplete scheduler-bound Issue target");
+  if (!expectedRepository || !expectedTargetText) {
+    throw new Error(options.errors.incomplete);
   }
-  const expectedIssueNumber = Number(expectedIssueText);
-  if (!isProjectPath(expectedRepository) || !Number.isSafeInteger(expectedIssueNumber) || expectedIssueNumber <= 0) {
-    throw new Error("invalid scheduler-bound Issue target");
+  const expectedTarget = Number(expectedTargetText);
+  if (!isProjectPath(expectedRepository) || !Number.isSafeInteger(expectedTarget) || expectedTarget <= 0) {
+    throw new Error(options.errors.invalid);
   }
-  if (repository !== expectedRepository || issueNumber !== expectedIssueNumber) {
+  if (options.repository !== expectedRepository || options.targetNumber !== expectedTarget) {
     throw new Error(
-      `requested Issue ${repository}#${issueNumber} does not match scheduler-bound target ${expectedRepository}#${expectedIssueNumber}`
+      options.errors.mismatch(expectedRepository, expectedTarget)
     );
   }
 }
 
-// src/issue-triage/comment.ts
+// src/issue-triage/target.ts
+function assertBoundIssueTarget(repository, issueNumber, apply, environment) {
+  assertBoundTarget({
+    repository,
+    targetNumber: issueNumber,
+    apply,
+    expectedRepository: environment.ISSUE_TRIAGE_EXPECTED_REPOSITORY,
+    expectedTarget: environment.ISSUE_TRIAGE_EXPECTED_ISSUE,
+    errors: {
+      missing: "apply mode requires a scheduler-bound Issue target; set ISSUE_TRIAGE_EXPECTED_REPOSITORY and ISSUE_TRIAGE_EXPECTED_ISSUE",
+      incomplete: "incomplete scheduler-bound Issue target",
+      invalid: "invalid scheduler-bound Issue target",
+      mismatch: (expectedRepository, expectedIssueNumber) => `requested Issue ${repository}#${issueNumber} does not match scheduler-bound target ${expectedRepository}#${expectedIssueNumber}`
+    }
+  });
+}
+
+// src/issues/fingerprint.ts
 import crypto from "node:crypto";
-var COMMENT_MARKER_PREFIX = "<!-- engineering-agent-workflows:issue-triage:v1";
+var ISSUE_FINGERPRINT_PATTERN = /^[0-9a-f]{20}$/;
 function issueFingerprint(issue2, comments = []) {
   return crypto.createHash("sha256").update(
     JSON.stringify({
@@ -15121,6 +15220,15 @@ function issueFingerprint(issue2, comments = []) {
     })
   ).digest("hex").slice(0, 20);
 }
+
+// src/issues/managed-comments.ts
+var ISSUE_TRIAGE_COMMENT_PREFIX = "<!-- engineering-agent-workflows:issue-triage:v1";
+function isIssueTriageComment(body) {
+  return body.startsWith(ISSUE_TRIAGE_COMMENT_PREFIX);
+}
+
+// src/issue-triage/comment.ts
+var COMMENT_MARKER_PREFIX = ISSUE_TRIAGE_COMMENT_PREFIX;
 function commentMarker(issueNumber, fingerprint) {
   return `${COMMENT_MARKER_PREFIX} issue=${issueNumber} fingerprint=${fingerprint} -->`;
 }
@@ -15205,7 +15313,7 @@ var triageAnalysisSchema = external_exports.object({
   priorityReason: external_exports.string().min(1).max(2e3)
 });
 var triageSubmissionSchema = external_exports.object({
-  issueFingerprint: external_exports.string().regex(/^[0-9a-f]{20}$/),
+  issueFingerprint: external_exports.string().regex(ISSUE_FINGERPRINT_PATTERN),
   analysis: triageAnalysisSchema
 });
 
@@ -15401,7 +15509,7 @@ function hasCurrentTriageComment(comments, issueNumber, fingerprint, botLogin) {
 }
 function findTriageComment(comments, botLogin) {
   return comments.find(
-    (comment) => isManagedTriageComment(comment, botLogin) && comment.body.startsWith(COMMENT_MARKER_PREFIX)
+    (comment) => isManagedTriageComment(comment, botLogin) && isIssueTriageComment(comment.body)
   );
 }
 function isManagedTriageComment(comment, botLogin) {
@@ -15412,10 +15520,10 @@ function isManagedTriageComment(comment, botLogin) {
 }
 function selectContextComments(comments, botLogin) {
   return comments.filter(
-    (comment) => !isManagedTriageComment(comment, botLogin) || !comment.body.startsWith(COMMENT_MARKER_PREFIX)
+    (comment) => !isManagedTriageComment(comment, botLogin) || !isIssueTriageComment(comment.body)
   ).sort((left, right) => left.id - right.id).slice(-50).map((comment) => ({
     ...comment,
-    body: truncate3(comment.body, 4e3)
+    body: truncateText(comment.body, 4e3)
   }));
 }
 function requiredBotLogin(apply, botLogin) {
@@ -15446,14 +15554,8 @@ async function ensureLabels(issues, repository, labels, policy) {
     );
   }
 }
-function errorMessage(error51) {
-  return error51 instanceof Error ? error51.message : String(error51);
-}
-function truncate3(value, max) {
-  return value.length <= max ? value : value.slice(0, max);
-}
 
-// src/main.ts
+// src/issue-triage/main.ts
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   const policy = await loadPolicy();
@@ -15487,7 +15589,7 @@ async function main() {
   ) : await applyIssueTriage(
     options.repository,
     options.issueNumber,
-    JSON.parse(await readFile(options.analysisFile, "utf8")),
+    JSON.parse(await readFile2(options.analysisFile, "utf8")),
     apply,
     dependencies
   );
@@ -15495,22 +15597,13 @@ async function main() {
 `);
 }
 async function loadPolicy() {
-  const candidates = [
-    fileURLToPath(new URL("../policy.json", import.meta.url)),
-    path.resolve("agents/issue-triage/policy.json")
-  ];
-  let lastError;
-  for (const candidate of candidates) {
-    try {
-      return triagePolicySchema.parse(
-        JSON.parse(await readFile(candidate, "utf8"))
-      );
-    } catch (error51) {
-      lastError = error51;
-    }
-  }
-  throw new Error(
-    `failed to load issue triage policy: ${errorMessage2(lastError)}`
+  return loadJsonFromCandidates(
+    [
+      fileURLToPath(new URL("../policy.json", import.meta.url)),
+      path.resolve("agents/issue-triage/policy.json")
+    ],
+    (value) => triagePolicySchema.parse(value),
+    "failed to load issue triage policy"
   );
 }
 function parseArguments(args) {
@@ -15551,19 +15644,8 @@ function parseArguments(args) {
     ...analysisFile ? { analysisFile } : {}
   };
 }
-function requiredArgumentValue(args, index, name) {
-  const value = args[index]?.trim();
-  if (!value) throw new Error(`${name} requires a value`);
-  return value;
-}
-function envBoolean(value) {
-  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
-}
-function errorMessage2(error51) {
-  return error51 instanceof Error ? error51.message : String(error51);
-}
 main().catch((error51) => {
-  process.stderr.write(`issue triage failed: ${errorMessage2(error51)}
+  process.stderr.write(`issue triage failed: ${errorMessage(error51)}
 `);
   process.exitCode = 1;
 });

@@ -1,5 +1,7 @@
 import type { IssuesClient } from "../issues/client.js";
+import { issueSearchText } from "../issues/search.js";
 import type { Issue, IssueCandidate, IssueComment } from "../issues/types.js";
+import { truncateText } from "../runtime/text.js";
 import { isProjectPath } from "../issues/types.js";
 import type { GitLabIssueAPI, GitLabNoteAPI } from "./types.js";
 
@@ -36,7 +38,7 @@ export class GitLabClient implements IssuesClient {
     issue: Issue,
     limit: number,
   ): Promise<IssueCandidate[]> {
-    const title = searchText(issue.title);
+    const title = issueSearchText(issue.title);
     if (!title) return [];
     const query = new URLSearchParams({
       search: title,
@@ -55,7 +57,7 @@ export class GitLabClient implements IssuesClient {
       .map((candidate) => ({
         number: candidate.iid,
         title: candidate.title,
-        body: truncate(candidate.description ?? "", 4000),
+        body: truncateText(candidate.description ?? "", 4000),
         state: candidate.state,
         labels: candidate.labels,
         url: candidate.web_url,
@@ -229,19 +231,6 @@ function normalizeColor(color: string): string {
   return `#${/^[0-9a-f]{6}$/i.test(normalized) ? normalized : "ededed"}`;
 }
 
-function searchText(title: string): string {
-  return title
-    .replace(/^\[[^\]]+\]\s*:?\s*/, "")
-    .replace(/["'`:+(){}[\]\\]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
-}
-
-function truncate(value: string, max: number): string {
-  return value.length <= max ? value : value.slice(0, max);
-}
-
 async function responseError(
   method: string,
   path: string,
@@ -249,6 +238,6 @@ async function responseError(
 ): Promise<Error> {
   const text = await response.text().catch(() => "");
   return new Error(
-    `GitLab API ${method} ${path} failed with HTTP ${response.status}: ${truncate(text, 1000)}`,
+    `GitLab API ${method} ${path} failed with HTTP ${response.status}: ${truncateText(text, 1000)}`,
   );
 }
