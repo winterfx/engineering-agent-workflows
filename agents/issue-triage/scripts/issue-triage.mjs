@@ -359,178 +359,8 @@ async function responseError(method, path2, response) {
 }
 
 // src/issues/types.ts
-function isProjectPath(value) {
-  return /^[^/\s]+(?:\/[^/\s]+)+$/.test(value);
-}
-
-// src/gitlab/client.ts
-var GitLabClient = class {
-  #token;
-  #baseUrl;
-  #fetch;
-  constructor(options = {}) {
-    this.#token = options.token?.trim() ?? "";
-    this.#baseUrl = (options.baseUrl ?? "https://gitlab.com/api/v4").replace(
-      /\/+$/,
-      ""
-    );
-    this.#fetch = options.fetch ?? fetch;
-  }
-  async getIssue(project, issueNumber) {
-    const issue2 = await this.#request(
-      "GET",
-      `${projectIssuesPath(project)}/${issueNumber}`
-    );
-    return normalizeIssue2(issue2);
-  }
-  async searchCandidates(project, issue2, limit) {
-    const title = issueSearchText(issue2.title);
-    if (!title) return [];
-    const query = new URLSearchParams({
-      search: title,
-      in: "title",
-      scope: "all",
-      per_page: String(Math.min(Math.max(limit + 1, 1), 100)),
-      page: "1"
-    });
-    const candidates = await this.#request(
-      "GET",
-      `${projectIssuesPath(project)}?${query.toString()}`
-    );
-    return candidates.filter((candidate) => candidate.iid !== issue2.number).slice(0, limit).map((candidate) => ({
-      number: candidate.iid,
-      title: candidate.title,
-      body: truncateText(candidate.description ?? "", 4e3),
-      state: candidate.state,
-      labels: candidate.labels,
-      url: candidate.web_url
-    }));
-  }
-  async listComments(project, issueNumber) {
-    const comments = [];
-    for (let page = 1; ; page += 1) {
-      const response = await this.#rawRequest(
-        "GET",
-        `${projectIssuesPath(project)}/${issueNumber}/notes?per_page=100&page=${page}&sort=asc&order_by=created_at`
-      );
-      if (!response.ok) {
-        throw await responseError2("GET", response.url, response);
-      }
-      const batch = await response.json();
-      comments.push(
-        ...batch.filter((note) => !note.system).map(normalizeComment2)
-      );
-      if (!response.headers.get("X-Next-Page") && batch.length < 100) {
-        return comments;
-      }
-    }
-  }
-  async ensureLabel(project, name, color, description) {
-    const path2 = `/projects/${projectID(project)}/labels/${encodeURIComponent(name)}`;
-    const response = await this.#rawRequest("GET", path2);
-    if (response.ok) return;
-    if (response.status !== 404) {
-      throw await responseError2("GET", path2, response);
-    }
-    await this.#request("POST", `/projects/${projectID(project)}/labels`, {
-      name,
-      color: normalizeColor2(color),
-      description: description?.trim() || "Managed by engineering-agent-workflows"
-    });
-  }
-  async addLabels(project, issueNumber, labels) {
-    if (labels.length === 0) return;
-    await this.#request("PUT", `${projectIssuesPath(project)}/${issueNumber}`, {
-      add_labels: labels.join(",")
-    });
-  }
-  async removeLabel(project, issueNumber, label) {
-    await this.#request("PUT", `${projectIssuesPath(project)}/${issueNumber}`, {
-      remove_labels: label
-    });
-  }
-  async createComment(project, issueNumber, body) {
-    const note = await this.#request(
-      "POST",
-      `${projectIssuesPath(project)}/${issueNumber}/notes`,
-      { body }
-    );
-    return normalizeComment2(note);
-  }
-  async updateComment(project, issueNumber, commentID, body) {
-    const note = await this.#request(
-      "PUT",
-      `${projectIssuesPath(project)}/${issueNumber}/notes/${commentID}`,
-      { body }
-    );
-    return normalizeComment2(note);
-  }
-  async #request(method, path2, body) {
-    const response = await this.#rawRequest(method, path2, body);
-    if (!response.ok) throw await responseError2(method, path2, response);
-    return await response.json();
-  }
-  #rawRequest(method, path2, body) {
-    const headers = {
-      Accept: "application/json",
-      "User-Agent": "engineering-agent-workflows/issue-triage"
-    };
-    if (this.#token) headers["PRIVATE-TOKEN"] = this.#token;
-    if (body !== void 0) headers["Content-Type"] = "application/json";
-    return this.#fetch(`${this.#baseUrl}${path2}`, {
-      method,
-      headers,
-      ...body === void 0 ? {} : { body: JSON.stringify(body) }
-    });
-  }
-};
-function projectIssuesPath(project) {
-  return `/projects/${projectID(project)}/issues`;
-}
-function projectID(project) {
-  if (!isProjectPath(project)) {
-    throw new Error(`invalid GitLab project path: ${project}`);
-  }
-  return encodeURIComponent(project);
-}
-function normalizeIssue2(issue2) {
-  return {
-    number: issue2.iid,
-    title: issue2.title,
-    body: issue2.description,
-    state: issue2.state,
-    htmlUrl: issue2.web_url,
-    updatedAt: issue2.updated_at,
-    labels: issue2.labels,
-    ...issue2.author ? {
-      user: {
-        login: issue2.author.username,
-        type: issue2.author.bot ? "Bot" : "User"
-      }
-    } : {}
-  };
-}
-function normalizeComment2(note) {
-  return {
-    id: note.id,
-    body: note.body,
-    ...note.author ? {
-      user: {
-        login: note.author.username,
-        type: note.author.bot ? "Bot" : "User"
-      }
-    } : {}
-  };
-}
-function normalizeColor2(color) {
-  const normalized = color.trim().replace(/^#/, "");
-  return `#${/^[0-9a-f]{6}$/i.test(normalized) ? normalized : "ededed"}`;
-}
-async function responseError2(method, path2, response) {
-  const text = await response.text().catch(() => "");
-  return new Error(
-    `GitLab API ${method} ${path2} failed with HTTP ${response.status}: ${truncateText(text, 1e3)}`
-  );
+function isRepositorySlug(value) {
+  return /^[^/\s]+\/[^/\s]+$/.test(value);
 }
 
 // src/runtime/cli.ts
@@ -15196,7 +15026,7 @@ function assertBoundTarget(options) {
     throw new Error(options.errors.incomplete);
   }
   const expectedTarget = Number(expectedTargetText);
-  if (!isProjectPath(expectedRepository) || !Number.isSafeInteger(expectedTarget) || expectedTarget <= 0) {
+  if (!isRepositorySlug(expectedRepository) || !Number.isSafeInteger(expectedTarget) || expectedTarget <= 0) {
     throw new Error(options.errors.invalid);
   }
   if (options.repository !== expectedRepository || options.targetNumber !== expectedTarget) {
@@ -15585,21 +15415,14 @@ async function main() {
     apply,
     process.env
   );
-  const provider = process.env.ISSUE_TRIAGE_PROVIDER?.trim().toLowerCase() ?? "gitlab";
-  if (provider !== "gitlab" && provider !== "github") {
-    throw new Error(`unsupported ISSUE_TRIAGE_PROVIDER: ${provider}`);
-  }
-  const issues = provider === "github" ? new GitHubClient({
+  const issues = new GitHubClient({
     ...process.env.GITHUB_TOKEN ? { token: process.env.GITHUB_TOKEN } : {},
     ...process.env.GITHUB_API_URL ? { baseUrl: process.env.GITHUB_API_URL } : {}
-  }) : new GitLabClient({
-    ...process.env.GITLAB_TOKEN ? { token: process.env.GITLAB_TOKEN } : {},
-    ...process.env.GITLAB_API_URL ? { baseUrl: process.env.GITLAB_API_URL } : {}
   });
   const dependencies = {
     issues,
     policy,
-    ...provider === "github" ? process.env.GITHUB_BOT_LOGIN ? { botLogin: process.env.GITHUB_BOT_LOGIN } : {} : process.env.GITLAB_BOT_USERNAME ? { botLogin: process.env.GITLAB_BOT_USERNAME } : {}
+    ...process.env.GITHUB_BOT_LOGIN ? { botLogin: process.env.GITHUB_BOT_LOGIN } : {}
   };
   const result = options.command === "prepare" ? await prepareIssueTriage(
     options.repository,
@@ -15649,8 +15472,8 @@ function parseArguments(args) {
       throw new Error(`unknown argument: ${argument}`);
     }
   }
-  if (!isProjectPath(repository)) {
-    throw new Error("--repository must use a GitLab namespace/project path");
+  if (!isRepositorySlug(repository)) {
+    throw new Error("--repository must use owner/repository format");
   }
   if (issueNumber <= 0) throw new Error("--issue is required");
   if (command === "apply" && !analysisFile) {

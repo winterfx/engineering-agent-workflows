@@ -2,8 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { GitHubClient } from "../github/client.js";
-import { GitLabClient } from "../gitlab/client.js";
-import { isProjectPath } from "../issues/types.js";
+import { isRepositorySlug } from "../issues/types.js";
 import { envBoolean, requiredArgumentValue } from "../runtime/cli.js";
 import { errorMessage } from "../runtime/errors.js";
 import { loadJsonFromCandidates } from "../runtime/load-json.js";
@@ -28,39 +27,18 @@ async function main(): Promise<void> {
     apply,
     process.env,
   );
-  const provider =
-    process.env.ISSUE_TRIAGE_PROVIDER?.trim().toLowerCase() ?? "gitlab";
-  if (provider !== "gitlab" && provider !== "github") {
-    throw new Error(`unsupported ISSUE_TRIAGE_PROVIDER: ${provider}`);
-  }
-  const issues =
-    provider === "github"
-      ? new GitHubClient({
-          ...(process.env.GITHUB_TOKEN
-            ? { token: process.env.GITHUB_TOKEN }
-            : {}),
-          ...(process.env.GITHUB_API_URL
-            ? { baseUrl: process.env.GITHUB_API_URL }
-            : {}),
-        })
-      : new GitLabClient({
-          ...(process.env.GITLAB_TOKEN
-            ? { token: process.env.GITLAB_TOKEN }
-            : {}),
-          ...(process.env.GITLAB_API_URL
-            ? { baseUrl: process.env.GITLAB_API_URL }
-            : {}),
-        });
+  const issues = new GitHubClient({
+    ...(process.env.GITHUB_TOKEN ? { token: process.env.GITHUB_TOKEN } : {}),
+    ...(process.env.GITHUB_API_URL
+      ? { baseUrl: process.env.GITHUB_API_URL }
+      : {}),
+  });
   const dependencies = {
     issues,
     policy,
-    ...(provider === "github"
-      ? process.env.GITHUB_BOT_LOGIN
-        ? { botLogin: process.env.GITHUB_BOT_LOGIN }
-        : {}
-      : process.env.GITLAB_BOT_USERNAME
-        ? { botLogin: process.env.GITLAB_BOT_USERNAME }
-        : {}),
+    ...(process.env.GITHUB_BOT_LOGIN
+      ? { botLogin: process.env.GITHUB_BOT_LOGIN }
+      : {}),
   };
 
   const result =
@@ -117,8 +95,8 @@ function parseArguments(args: string[]): CLIOptions {
     }
   }
 
-  if (!isProjectPath(repository)) {
-    throw new Error("--repository must use a GitLab namespace/project path");
+  if (!isRepositorySlug(repository)) {
+    throw new Error("--repository must use owner/repository format");
   }
   if (issueNumber <= 0) throw new Error("--issue is required");
   if (command === "apply" && !analysisFile) {

@@ -1,4 +1,4 @@
-import { isProjectPath } from "../issues/types.js";
+import { isRepositorySlug } from "../issues/types.js";
 
 export interface BoundTargetOptions {
   repository: string;
@@ -28,7 +28,7 @@ export function assertBoundTarget(options: BoundTargetOptions): void {
 
   const expectedTarget = Number(expectedTargetText);
   if (
-    !isProjectPath(expectedRepository) ||
+    !isRepositorySlug(expectedRepository) ||
     !Number.isSafeInteger(expectedTarget) ||
     expectedTarget <= 0
   ) {

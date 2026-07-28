@@ -6,8 +6,8 @@ env_file:
 agents:
   issue-triage:
     enabled: true
-    display_name: Issue Triage (GitLab + GitHub)
-    description: Classify, prioritize, and relate GitLab and GitHub Issues without rewriting titles.
+    display_name: Issue Triage (GitHub)
+    description: Classify, prioritize, and relate GitHub Issues without rewriting titles.
     provider: codex
     model: ${ISSUE_TRIAGE_MODEL}
     image: agent-compose-guest:local
@@ -16,10 +16,6 @@ agents:
       docker: {}
 
     env:
-      GITLAB_TOKEN:
-        value: ${GITLAB_TOKEN}
-        secret: true
-      GITLAB_API_URL: ${GITLAB_API_URL}
       GITHUB_TOKEN:
         value: ${GITHUB_TOKEN}
         secret: true
@@ -27,7 +23,6 @@ agents:
       GITHUB_BOT_LOGIN: ${GITHUB_BOT_LOGIN}
       GITHUB_ALLOWED_REPOSITORY: ${GITHUB_ALLOWED_REPOSITORY}
       ISSUE_TRIAGE_APPLY: ${ISSUE_TRIAGE_APPLY}
-      GITLAB_BOT_USERNAME: ${GITLAB_BOT_USERNAME}
 
     skills:
       - name: issue-triage

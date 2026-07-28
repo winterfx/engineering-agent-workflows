@@ -82,7 +82,7 @@ describe("makeDecision", () => {
       body: "same problem",
       state: "open",
       labels: [],
-      url: "https://gitlab.test/example/repo/-/issues/123",
+      url: "https://github.test/example/repo/issues/123",
     },
   ];
 

@@ -359,8 +359,8 @@ async function responseError(method, path3, response) {
 }
 
 // src/issues/types.ts
-function isProjectPath(value) {
-  return /^[^/\s]+(?:\/[^/\s]+)+$/.test(value);
+function isRepositorySlug(value) {
+  return /^[^/\s]+\/[^/\s]+$/.test(value);
 }
 
 // src/runtime/cli.ts
@@ -16518,7 +16518,7 @@ function assertBoundTarget(options) {
     throw new Error(options.errors.incomplete);
   }
   const expectedTarget = Number(expectedTargetText);
-  if (!isProjectPath(expectedRepository) || !Number.isSafeInteger(expectedTarget) || expectedTarget <= 0) {
+  if (!isRepositorySlug(expectedRepository) || !Number.isSafeInteger(expectedTarget) || expectedTarget <= 0) {
     throw new Error(options.errors.invalid);
   }
   if (options.repository !== expectedRepository || options.targetNumber !== expectedTarget) {
@@ -17266,7 +17266,7 @@ function parseArguments(args) {
       throw new Error(`unknown argument: ${argument}`);
     }
   }
-  if (!isProjectPath(repository)) {
+  if (!isRepositorySlug(repository)) {
     throw new Error("--repository must use owner/repository format");
   }
   if (["prepare", "apply", "fail"].includes(command) && (!Number.isSafeInteger(issueNumber) || issueNumber <= 0)) {

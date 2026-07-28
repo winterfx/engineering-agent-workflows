@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { GitHubClient } from "../github/client.js";
-import { isProjectPath } from "../issues/types.js";
+import { isRepositorySlug } from "../issues/types.js";
 import { envBoolean, requiredArgumentValue } from "../runtime/cli.js";
 import { errorMessage } from "../runtime/errors.js";
 import { loadJsonFromCandidates } from "../runtime/load-json.js";
@@ -244,7 +244,7 @@ function parseArguments(args: string[]): CLIOptions {
       throw new Error(`unknown argument: ${argument}`);
     }
   }
-  if (!isProjectPath(repository)) {
+  if (!isRepositorySlug(repository)) {
     throw new Error("--repository must use owner/repository format");
   }
   if (

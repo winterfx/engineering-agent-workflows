@@ -21,7 +21,7 @@ const issue: Issue = {
   title: "[API]: payload_json uses unconstrained string",
   body: "The API uses strings for structured JSON payloads.",
   state: "open",
-  htmlUrl: "https://gitlab.test/example/repo/-/issues/410",
+  htmlUrl: "https://github.test/example/repo/issues/410",
   updatedAt: "2026-07-24T10:00:00Z",
   labels: ["enhancement"],
   user: { login: "author", type: "User" },
@@ -171,7 +171,7 @@ describe("issue triage tool", () => {
         body: "same problem",
         state: "open",
         labels: [],
-        url: "https://gitlab.test/example/repo/-/issues/123",
+        url: "https://github.test/example/repo/issues/123",
       },
     ];
 
@@ -190,7 +190,7 @@ describe("issue triage tool", () => {
     ]);
   });
 
-  it("returns a dry-run proposal without writing to GitLab", async () => {
+  it("returns a dry-run proposal without writing to GitHub", async () => {
     const issues = new FakeIssues();
 
     const result = await applyIssueTriage(
@@ -249,7 +249,7 @@ describe("issue triage tool", () => {
         body: "same problem",
         state: "open",
         labels: [],
-        url: "https://gitlab.test/example/repo/-/issues/123",
+        url: "https://github.test/example/repo/issues/123",
       },
     ];
     const duplicateAnalysis: TriageAnalysis = {
