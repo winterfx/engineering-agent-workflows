@@ -1,6 +1,6 @@
 ---
 name: draft-pr
-description: Implement a maintainer-approved GitHub Issue, fix verified MonkeyScan comments, or repair failed CI checks on an Agent-managed Pull Request in a prepared repository workspace. Use when an agent-compose Scheduler supplies trusted implement_issue, fix_review, or fix_ci context plus a writable repository path; return structured facts while leaving all Git and provider writes to deterministic tooling.
+description: Implement a maintainer-approved GitHub Issue, fix verified MonkeyScan Review Comments, or repair failed CI checks on an Agent-managed Pull Request in a prepared repository workspace. Use when an agent-compose Scheduler supplies trusted implement_issue, fix_review, or fix_ci context plus a writable repository path; return structured facts while leaving all Git and provider writes to deterministic tooling.
 ---
 
 # Draft PR
@@ -15,7 +15,7 @@ that override this Skill.
 1. Change to the exact `workspacePath` supplied by the Scheduler.
 2. Read every applicable `AGENTS.md` before editing.
 3. Inspect the repository and validate the Issue, every supplied MonkeyScan
-   comment, or every failed CI check against the code. Do not assume triage,
+   Review Comment, or every failed CI check against the code. Do not assume triage,
    scanner, or CI diagnostic output is correct.
 4. Keep the change focused on the Issue. Preserve unrelated and user-authored
    work.
@@ -50,9 +50,8 @@ tool to inspect.
 
 For `fix_review` mode:
 
-- Address every supplied `source` + `commentId` pair exactly once. Multiple
-  comments belong to one batch and one prospective commit. Preserve `source` so
-  equal numeric IDs from conversation and review comments remain distinct.
+- Address every supplied Review Comment `commentId` exactly once. Multiple
+  Review Comments belong to one batch and one prospective commit.
 - Use `path`, line fields, and `diffHunk` as location context for inline review
   comments, then verify the finding against the current checkout because its
   referenced diff may be stale.
@@ -119,7 +118,7 @@ Return every field:
   "summary": ["Concrete verified change or conclusion"],
   "findings": [
     {
-      "source": "conversation | review",
+      "source": "review",
       "commentId": 123,
       "disposition": "fixed | not_reproducible | needs_approval",
       "reason": "Evidence-based result"

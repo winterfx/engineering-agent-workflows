@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { chmod, lstat, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import path from "node:path";
 import type { DraftPrInspection } from "./schema.js";
 
@@ -43,6 +44,7 @@ export interface GitDraftPrWorkspaceOptions {
   token: string;
   authorName: string;
   authorEmail: string;
+  gitCurlResolve?: string;
   lockTtlMs?: number;
 }
 
@@ -58,6 +60,7 @@ export class GitDraftPrWorkspace implements DraftPrWorkspace {
   readonly #token: string;
   readonly #authorName: string;
   readonly #authorEmail: string;
+  readonly #gitCurlResolve: string;
   readonly #lockTtlMs: number;
 
   constructor(options: GitDraftPrWorkspaceOptions) {
@@ -65,12 +68,14 @@ export class GitDraftPrWorkspace implements DraftPrWorkspace {
     this.#token = options.token.trim();
     this.#authorName = options.authorName.trim();
     this.#authorEmail = options.authorEmail.trim();
+    this.#gitCurlResolve = options.gitCurlResolve?.trim() ?? "";
     this.#lockTtlMs = options.lockTtlMs ?? 4 * 60 * 60 * 1000;
     if (!this.#token)
       throw new Error("GitHub token is required for Git workspace preparation");
     if (!this.#authorName || !this.#authorEmail) {
       throw new Error("Git author name and email are required");
     }
+    gitCurlResolveEnvironment(this.#gitCurlResolve);
   }
 
   async prepare(input: {
@@ -360,6 +365,7 @@ export class GitDraftPrWorkspace implements DraftPrWorkspace {
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_TERMINAL_PROMPT: "0",
+      ...gitCurlResolveEnvironment(this.#gitCurlResolve),
     };
   }
 
@@ -417,6 +423,27 @@ export class GitDraftPrWorkspace implements DraftPrWorkspace {
       { mode: 0o600 },
     );
   }
+}
+
+export function gitCurlResolveEnvironment(
+  value: string | undefined,
+): NodeJS.ProcessEnv {
+  const normalized = value?.trim() ?? "";
+  if (!normalized) return {};
+  const [host, port, address, ...extra] = normalized.split(":");
+  if (
+    host !== "github.com" ||
+    port !== "443" ||
+    isIP(address ?? "") !== 4 ||
+    extra.length > 0
+  ) {
+    throw new Error("Draft PR Git curl resolve must use github.com:443:<IPv4>");
+  }
+  return {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.curloptResolve",
+    GIT_CONFIG_VALUE_0: normalized,
+  };
 }
 
 interface RunGitOptions {

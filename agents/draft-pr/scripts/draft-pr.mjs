@@ -15057,6 +15057,7 @@ function assertAllowedRepository(repository, allowed) {
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { chmod, lstat, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import path from "node:path";
 var DraftPrWorkspaceLockError = class extends Error {
   constructor(target) {
@@ -15069,18 +15070,21 @@ var GitDraftPrWorkspace = class {
   #token;
   #authorName;
   #authorEmail;
+  #gitCurlResolve;
   #lockTtlMs;
   constructor(options) {
     this.#root = path.resolve(options.root);
     this.#token = options.token.trim();
     this.#authorName = options.authorName.trim();
     this.#authorEmail = options.authorEmail.trim();
+    this.#gitCurlResolve = options.gitCurlResolve?.trim() ?? "";
     this.#lockTtlMs = options.lockTtlMs ?? 4 * 60 * 60 * 1e3;
     if (!this.#token)
       throw new Error("GitHub token is required for Git workspace preparation");
     if (!this.#authorName || !this.#authorEmail) {
       throw new Error("Git author name and email are required");
     }
+    gitCurlResolveEnvironment(this.#gitCurlResolve);
   }
   async prepare(input) {
     validateCloneUrl(input.cloneUrl);
@@ -15318,7 +15322,8 @@ var GitDraftPrWorkspace = class {
       LANG: process.env.LANG ?? "C.UTF-8",
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_TERMINAL_PROMPT: "0"
+      GIT_TERMINAL_PROMPT: "0",
+      ...gitCurlResolveEnvironment(this.#gitCurlResolve)
     };
   }
   async #authenticatedGitEnvironment() {
@@ -15372,6 +15377,19 @@ var GitDraftPrWorkspace = class {
     );
   }
 };
+function gitCurlResolveEnvironment(value) {
+  const normalized = value?.trim() ?? "";
+  if (!normalized) return {};
+  const [host, port, address, ...extra] = normalized.split(":");
+  if (host !== "github.com" || port !== "443" || isIP(address ?? "") !== 4 || extra.length > 0) {
+    throw new Error("Draft PR Git curl resolve must use github.com:443:<IPv4>");
+  }
+  return {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.curloptResolve",
+    GIT_CONFIG_VALUE_0: normalized
+  };
+}
 async function runGit(args, options) {
   const safeArgs = options.cwd ? ["-c", `safe.directory=${options.cwd}`, ...args] : args;
   return new Promise((resolve, reject) => {
@@ -15921,7 +15939,7 @@ function emptyReviewFixState() {
 }
 
 // src/draft-pr/review-schema.ts
-var reviewCommentSourceSchema = external_exports.enum(["conversation", "review"]);
+var reviewCommentSourceSchema = external_exports.literal("review");
 var reviewCommentReferenceSchema = external_exports.object({
   source: reviewCommentSourceSchema,
   commentId: external_exports.number().int().positive()
@@ -15965,6 +15983,9 @@ var reviewFixSubmissionSchema = external_exports.object({
 
 // src/draft-pr/review-tool.ts
 async function listReviewFixTargets(repository, dependencies) {
+  if (!dependencies.apply) {
+    return dryRunReviewReconciliation(repository);
+  }
   assertAllowedRepository(repository, dependencies.allowedRepository);
   requireReviewIdentities(dependencies);
   const pullRequests = await dependencies.provider.listOpenPullRequests(repository);
@@ -15976,12 +15997,7 @@ async function listReviewFixTargets(repository, dependencies) {
       dependencies.provider.listReviewComments(repository, pullRequest.number)
     ]);
     const state = reviewState(conversationComments, dependencies);
-    if (state.iterations < dependencies.policy.maxFixIterations && pendingMonkeyScanComments(
-      conversationComments,
-      reviewComments,
-      state,
-      dependencies
-    ).length) {
+    if (state.iterations < dependencies.policy.maxFixIterations && pendingMonkeyScanComments(reviewComments, state, dependencies).length) {
       targets.push({
         pullRequestNumber: pullRequest.number,
         headSha: pullRequest.headSha
@@ -15989,6 +16005,29 @@ async function listReviewFixTargets(repository, dependencies) {
     }
   }
   return { ok: true, repository, targets };
+}
+function dryRunReviewReconciliation(repository) {
+  return {
+    ok: true,
+    ignored: true,
+    reason: "review reconciliation is disabled in dry-run",
+    repository,
+    targets: []
+  };
+}
+function monkeyScanEventAuthorReason(login, userId, dependencies) {
+  const actualLogin = login.trim().toLowerCase();
+  const expectedLogin = dependencies.monkeyScanBotLogin.trim().toLowerCase();
+  if (!expectedLogin || actualLogin !== expectedLogin) {
+    return "review author is not MonkeyScan";
+  }
+  if (dependencies.botLogin?.trim().toLowerCase() && actualLogin === dependencies.botLogin.trim().toLowerCase()) {
+    return "workflow status comment is not a MonkeyScan finding";
+  }
+  if (dependencies.monkeyScanBotUserId !== void 0 && userId !== dependencies.monkeyScanBotUserId) {
+    return "MonkeyScan user ID mismatch";
+  }
+  return void 0;
 }
 async function prepareReviewFix(repository, pullRequestNumber, dependencies) {
   assertAllowedRepository(repository, dependencies.allowedRepository);
@@ -16004,7 +16043,6 @@ async function prepareReviewFix(repository, pullRequestNumber, dependencies) {
   if (reason) return skipped2(repository, pullRequestNumber, reason);
   const state = reviewState(conversationComments, dependencies);
   const pending = pendingMonkeyScanComments(
-    conversationComments,
     reviewComments,
     state,
     dependencies
@@ -16013,7 +16051,7 @@ async function prepareReviewFix(repository, pullRequestNumber, dependencies) {
     return skipped2(
       repository,
       pullRequestNumber,
-      "no unprocessed MonkeyScan comments"
+      "no unprocessed MonkeyScan review comments"
     );
   }
   if (state.iterations >= dependencies.policy.maxFixIterations) {
@@ -16105,11 +16143,7 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
     throw new Error("Pull Request head changed after review fix preparation");
   }
   const expectedKeys = submission.commentRefs.map(commentKey);
-  const preparedComments = allMonkeyScanComments(
-    conversationComments,
-    reviewComments,
-    dependencies
-  ).filter((value) => expectedKeys.includes(commentKey(value))).sort(compareSourcedComments);
+  const preparedComments = allMonkeyScanComments(reviewComments, dependencies).filter((value) => expectedKeys.includes(commentKey(value))).sort(compareSourcedComments);
   if (new Set(expectedKeys).size !== expectedKeys.length || preparedComments.length !== submission.commentRefs.length || fingerprintComments(preparedComments) !== submission.commentsFingerprint) {
     throw new Error("MonkeyScan comments changed after review fix preparation");
   }
@@ -16123,11 +16157,7 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
   }
   validateFindingCoverage(submission.analysis, submission.commentRefs);
   const nextIterations = submission.previousIterations + 1;
-  const nextConversationCursor = nextCursor(
-    "conversation",
-    submission.previousConversationCursor,
-    submission.commentRefs
-  );
+  const nextConversationCursor = submission.previousConversationCursor;
   const nextReviewCursor = nextCursor(
     "review",
     submission.previousReviewCursor,
@@ -16261,26 +16291,14 @@ async function failReviewFix(repository, pullRequestNumber, conversationCursor, 
     outcome: "failed"
   };
 }
-function pendingMonkeyScanComments(conversationComments, reviewComments, state, dependencies) {
-  return allMonkeyScanComments(
-    conversationComments,
-    reviewComments,
-    dependencies
-  ).filter(
-    (value) => value.source === "conversation" ? value.comment.id > state.conversationCursor : value.comment.id > state.reviewCursor
-  ).sort(compareSourcedComments);
+function pendingMonkeyScanComments(reviewComments, state, dependencies) {
+  return allMonkeyScanComments(reviewComments, dependencies).filter((value) => value.comment.id > state.reviewCursor).sort(compareSourcedComments);
 }
-function allMonkeyScanComments(conversationComments, reviewComments, dependencies) {
-  return [
-    ...conversationComments.map((comment) => ({
-      source: "conversation",
-      comment
-    })),
-    ...reviewComments.map((comment) => ({
-      source: "review",
-      comment
-    }))
-  ].filter((value) => isMonkeyScanComment(value.comment, dependencies));
+function allMonkeyScanComments(reviewComments, dependencies) {
+  return reviewComments.map((comment) => ({
+    source: "review",
+    comment
+  })).filter((value) => isMonkeyScanComment(value.comment, dependencies));
 }
 function isMonkeyScanComment(comment, dependencies) {
   const user = comment.user;
@@ -16564,7 +16582,7 @@ function buildDraftPrStatusComment(issueNumber, status, details = {}) {
       "The repository development Agent could not prepare a Draft PR."
     );
   }
-  const reasons = (details.reasons ?? []).map(sanitizeLine).filter(Boolean);
+  const reasons = (details.reasons ?? []).map(sanitizeFailureReason).filter(Boolean);
   if (reasons.length > 0) {
     lines.push("", "### Attention", "");
     for (const reason of reasons.slice(0, 8)) lines.push(`- ${reason}`);
@@ -16575,6 +16593,12 @@ function buildDraftPrStatusComment(issueNumber, status, details = {}) {
 }
 function sanitizeLine(value) {
   return value.replace(/<!--[\s\S]*?-->/g, "").replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 500);
+}
+function sanitizeFailureReason(value) {
+  return sanitizeLine(value).replace(
+    /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
+    "<redacted-token>"
+  ).replace(/(Authorization\s*:\s*)(?:Bearer|token)\s+\S+/gi, "$1<redacted>").replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1<redacted>@").replace(/([?&](?:access_token|token)=)[^&\s]+/gi, "$1<redacted>").slice(0, 500);
 }
 
 // src/draft-pr/schema.ts
@@ -17057,6 +17081,7 @@ async function main() {
   const options = parseArguments(process.argv.slice(2));
   const policy = await loadPolicy();
   const apply = envBoolean(process.env.DRAFT_PR_APPLY);
+  const allowedRepository = process.env.DRAFT_PR_ALLOWED_REPOSITORY?.trim() || process.env.GITHUB_ALLOWED_REPOSITORY?.trim() || "";
   if (["prepare", "apply", "fail"].includes(options.command)) {
     assertBoundDraftPrTarget(
       options.repository,
@@ -17072,6 +17097,13 @@ async function main() {
       process.env
     );
   }
+  if (options.command === "list-review-targets" && !apply) {
+    process.stdout.write(
+      `${JSON.stringify(dryRunReviewReconciliation(allowedRepository), null, 2)}
+`
+    );
+    return;
+  }
   const token = process.env.GITHUB_TOKEN?.trim() ?? "";
   const provider = new GitHubClient({
     ...token ? { token } : {},
@@ -17081,19 +17113,26 @@ async function main() {
     root: process.env.DRAFT_PR_WORKSPACE_ROOT?.trim() || "/draft-pr-workspaces",
     token,
     authorName: process.env.DRAFT_PR_GIT_AUTHOR_NAME?.trim() || "engineering-agent-workflows",
-    authorEmail: process.env.DRAFT_PR_GIT_AUTHOR_EMAIL?.trim() || "engineering-agent-workflows@users.noreply.github.com"
+    authorEmail: process.env.DRAFT_PR_GIT_AUTHOR_EMAIL?.trim() || "engineering-agent-workflows@users.noreply.github.com",
+    ...process.env.DRAFT_PR_GIT_CURL_RESOLVE ? { gitCurlResolve: process.env.DRAFT_PR_GIT_CURL_RESOLVE } : {}
   });
   const dependencies = {
     provider,
     workspace,
     policy,
-    allowedRepository: process.env.DRAFT_PR_ALLOWED_REPOSITORY?.trim() || process.env.GITHUB_ALLOWED_REPOSITORY?.trim() || "",
+    allowedRepository,
     serverUrl: process.env.GITHUB_SERVER_URL?.trim() || "https://github.com",
     apply,
     ...process.env.GITHUB_BOT_LOGIN ? { botLogin: process.env.GITHUB_BOT_LOGIN } : {},
     monkeyScanBotLogin: process.env.MONKEYSCAN_BOT_LOGIN?.trim() ?? "",
     ...isPositiveInteger(process.env.MONKEYSCAN_BOT_USER_ID) ? { monkeyScanBotUserId: Number(process.env.MONKEYSCAN_BOT_USER_ID) } : {}
   };
+  const reviewRepository = options.command === "list-review-targets" && !options.repository ? dependencies.allowedRepository : options.repository;
+  const reviewEventReason = options.command === "prepare-review" && options.eventAuthorLogin ? monkeyScanEventAuthorReason(
+    options.eventAuthorLogin,
+    options.eventAuthorId,
+    dependencies
+  ) : void 0;
   const result = options.command === "prepare" ? await prepareDraftPr(
     options.repository,
     options.issueNumber,
@@ -17111,7 +17150,13 @@ async function main() {
     options.issueNumber,
     options.message ?? "Draft PR Agent execution failed",
     dependencies
-  ) : options.command === "list-review-targets" ? await listReviewFixTargets(options.repository, dependencies) : options.command === "prepare-review" ? await prepareReviewFix(
+  ) : options.command === "list-review-targets" ? await listReviewFixTargets(reviewRepository, dependencies) : options.command === "prepare-review" ? reviewEventReason ? {
+    ok: true,
+    skipped: true,
+    reason: reviewEventReason,
+    repository: options.repository,
+    pullRequestNumber: options.pullRequestNumber
+  } : await prepareReviewFix(
     options.repository,
     options.pullRequestNumber,
     dependencies
@@ -17181,6 +17226,8 @@ function parseArguments(args) {
   let headSha = "";
   let checkSuiteId = 0;
   let attempts = 0;
+  let eventAuthorLogin = "";
+  let eventAuthorId = -1;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--repository") {
@@ -17211,11 +17258,15 @@ function parseArguments(args) {
       checkSuiteId = Number(requiredArgumentValue(args, ++index, argument));
     } else if (argument === "--attempts") {
       attempts = Number(requiredArgumentValue(args, ++index, argument));
+    } else if (argument === "--event-author-login") {
+      eventAuthorLogin = requiredArgumentValue(args, ++index, argument);
+    } else if (argument === "--event-author-id") {
+      eventAuthorId = Number(requiredArgumentValue(args, ++index, argument));
     } else {
       throw new Error(`unknown argument: ${argument}`);
     }
   }
-  if (!isProjectPath(repository)) {
+  if (!isProjectPath(repository) && command !== "list-review-targets") {
     throw new Error("--repository must use owner/repository format");
   }
   if (["prepare", "apply", "fail"].includes(command) && (!Number.isSafeInteger(issueNumber) || issueNumber <= 0)) {
@@ -17250,7 +17301,9 @@ function parseArguments(args) {
     ...iterations ? { iterations } : {},
     ...headSha ? { headSha } : {},
     ...Number.isSafeInteger(checkSuiteId) && checkSuiteId > 0 ? { checkSuiteId } : {},
-    ...Number.isSafeInteger(attempts) && attempts >= 0 ? { attempts } : {}
+    ...Number.isSafeInteger(attempts) && attempts >= 0 ? { attempts } : {},
+    ...eventAuthorLogin ? { eventAuthorLogin } : {},
+    ...Number.isSafeInteger(eventAuthorId) && eventAuthorId >= 0 ? { eventAuthorId } : {}
   };
 }
 main().catch((error51) => {

@@ -66,27 +66,28 @@ Requests, and cleans the per-Issue workspace after evaluation.
 
 ### MonkeyScan review fixes
 
-The same Draft PR Agent processes ordinary Conversation comments and inline
-Review Comments posted by the configured MonkeyScan bot on an open
-Agent-managed Draft PR. It does not reuse the Issue implementation sandbox.
-Each attempt uses a new Agent sandbox and a fresh shallow clone of the current
-`codex/issue-*` branch.
+The same Draft PR Agent processes inline Review Comments posted by the
+configured MonkeyScan bot on an open Agent-managed Draft PR. A submitted Review
+or newly created inline Review Comment webhook starts the flow; ordinary PR
+Conversation comments never do. Each attempt uses a new Agent sandbox and a
+fresh shallow clone of the current `codex/issue-*` branch instead of reusing the
+Issue implementation sandbox.
 
-All unprocessed MonkeyScan comments visible on one PR are sorted by comment ID
-and handled as one batch, producing at most one commit and one non-force push.
+All unprocessed MonkeyScan Review Comments visible on one PR are sorted by
+comment ID and handled as one batch, producing at most one commit and one
+non-force push.
 Inline findings include their file path, line location, diff hunk, and referenced
 commit metadata. The deterministic tool verifies the bot login and optional
 numeric user ID, the allowlisted head repository, Draft/open state, managed
 branch prefix, comment fingerprint, and current head SHA. A per-PR lock prevents
 concurrent pushes.
 
-A managed PR comment stores separate Conversation and Review Comment cursors,
-the current head SHA, and fix iteration count. Existing v1 Conversation cursors
-remain readable. A one-minute Scheduler reconciliation finds comments whose
-webhook overlapped another run. Automatic fixes stop after three batches or when
-the diff crosses the existing approval gates. MonkeyScan comments are untrusted
-findings: the Agent must verify each one against code and cannot edit, reply to,
-or resolve scanner review threads.
+A managed PR comment stores the Review Comment cursor, current head SHA, and fix
+iteration count. Its legacy Conversation cursor remains readable for state
+compatibility but no longer selects findings. Automatic fixes stop after three
+batches or when the diff crosses the existing approval gates. MonkeyScan Review
+Comments are untrusted findings: the Agent must verify each one against code and
+cannot edit, reply to, or resolve scanner review threads.
 
 ### CI failure fixes
 
@@ -164,13 +165,12 @@ Concretely:
    and annotations. One `fix_ci` run may produce at most one validated commit
    and push, which triggers CI again on the new head. Stale-head and successful
    suite events are ignored.
-6. **Automatic MonkeyScan batch:** MonkeyScan may publish several Conversation
-   or inline Review Comments. The workflow collects pending MonkeyScan findings
-   up to the configured batch limit (currently 50), sorts them deterministically,
-   and gives them to one `fix_review` run. A valid result produces at most one
-   commit and one push to the existing PR branch. Overflow or a comment that
-   arrives after the batch snapshot is picked up by its webhook or the
-   one-minute reconciliation pass.
+6. **Automatic MonkeyScan batch:** MonkeyScan may publish several inline Review
+   Comments. The submitted Review and Review Comment webhooks feed the same
+   flow, which collects pending findings up to the configured batch limit
+   (currently 50), sorts them deterministically, and gives them to one
+   `fix_review` run. A valid result produces at most one commit and one push to
+   the existing PR branch. Ordinary PR Conversation comments are ignored.
 7. **Conditional human intervention:** automatic CI and review fixes stop after
    three batches, on conflicting findings, on approval-gated risk, or when
    validation cannot establish a safe fix. A maintainer then decides whether to

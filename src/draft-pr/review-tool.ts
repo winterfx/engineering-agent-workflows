@@ -95,9 +95,14 @@ export async function listReviewFixTargets(
   dependencies: ReviewFixDependencies,
 ): Promise<{
   ok: true;
+  ignored?: boolean;
+  reason?: string;
   repository: string;
   targets: Array<{ pullRequestNumber: number; headSha: string }>;
 }> {
+  if (!dependencies.apply) {
+    return dryRunReviewReconciliation(repository);
+  }
   assertAllowedRepository(repository, dependencies.allowedRepository);
   requireReviewIdentities(dependencies);
   const pullRequests =
@@ -112,12 +117,7 @@ export async function listReviewFixTargets(
     const state = reviewState(conversationComments, dependencies);
     if (
       state.iterations < dependencies.policy.maxFixIterations &&
-      pendingMonkeyScanComments(
-        conversationComments,
-        reviewComments,
-        state,
-        dependencies,
-      ).length
+      pendingMonkeyScanComments(reviewComments, state, dependencies).length
     ) {
       targets.push({
         pullRequestNumber: pullRequest.number,
@@ -126,6 +126,47 @@ export async function listReviewFixTargets(
     }
   }
   return { ok: true, repository, targets };
+}
+
+export function dryRunReviewReconciliation(repository: string): {
+  ok: true;
+  ignored: true;
+  reason: string;
+  repository: string;
+  targets: [];
+} {
+  return {
+    ok: true,
+    ignored: true,
+    reason: "review reconciliation is disabled in dry-run",
+    repository,
+    targets: [],
+  };
+}
+
+export function monkeyScanEventAuthorReason(
+  login: string,
+  userId: number | undefined,
+  dependencies: ReviewFixDependencies,
+): string | undefined {
+  const actualLogin = login.trim().toLowerCase();
+  const expectedLogin = dependencies.monkeyScanBotLogin.trim().toLowerCase();
+  if (!expectedLogin || actualLogin !== expectedLogin) {
+    return "review author is not MonkeyScan";
+  }
+  if (
+    dependencies.botLogin?.trim().toLowerCase() &&
+    actualLogin === dependencies.botLogin.trim().toLowerCase()
+  ) {
+    return "workflow status comment is not a MonkeyScan finding";
+  }
+  if (
+    dependencies.monkeyScanBotUserId !== undefined &&
+    userId !== dependencies.monkeyScanBotUserId
+  ) {
+    return "MonkeyScan user ID mismatch";
+  }
+  return undefined;
 }
 
 export async function prepareReviewFix(
@@ -147,7 +188,6 @@ export async function prepareReviewFix(
 
   const state = reviewState(conversationComments, dependencies);
   const pending = pendingMonkeyScanComments(
-    conversationComments,
     reviewComments,
     state,
     dependencies,
@@ -156,7 +196,7 @@ export async function prepareReviewFix(
     return skipped(
       repository,
       pullRequestNumber,
-      "no unprocessed MonkeyScan comments",
+      "no unprocessed MonkeyScan review comments",
     );
   }
   if (state.iterations >= dependencies.policy.maxFixIterations) {
@@ -256,11 +296,7 @@ export async function applyReviewFix(
     throw new Error("Pull Request head changed after review fix preparation");
   }
   const expectedKeys = submission.commentRefs.map(commentKey);
-  const preparedComments = allMonkeyScanComments(
-    conversationComments,
-    reviewComments,
-    dependencies,
-  )
+  const preparedComments = allMonkeyScanComments(reviewComments, dependencies)
     .filter((value) => expectedKeys.includes(commentKey(value)))
     .sort(compareSourcedComments);
   if (
@@ -281,11 +317,7 @@ export async function applyReviewFix(
   }
   validateFindingCoverage(submission.analysis, submission.commentRefs);
   const nextIterations = submission.previousIterations + 1;
-  const nextConversationCursor = nextCursor(
-    "conversation",
-    submission.previousConversationCursor,
-    submission.commentRefs,
-  );
+  const nextConversationCursor = submission.previousConversationCursor;
   const nextReviewCursor = nextCursor(
     "review",
     submission.previousReviewCursor,
@@ -441,39 +473,25 @@ export async function failReviewFix(
 }
 
 function pendingMonkeyScanComments(
-  conversationComments: IssueComment[],
   reviewComments: PullRequestReviewComment[],
-  state: Pick<ReviewFixState, "conversationCursor" | "reviewCursor">,
+  state: Pick<ReviewFixState, "reviewCursor">,
   dependencies: ReviewFixDependencies,
 ): SourcedComment[] {
-  return allMonkeyScanComments(
-    conversationComments,
-    reviewComments,
-    dependencies,
-  )
-    .filter((value) =>
-      value.source === "conversation"
-        ? value.comment.id > state.conversationCursor
-        : value.comment.id > state.reviewCursor,
-    )
+  return allMonkeyScanComments(reviewComments, dependencies)
+    .filter((value) => value.comment.id > state.reviewCursor)
     .sort(compareSourcedComments);
 }
 
 function allMonkeyScanComments(
-  conversationComments: IssueComment[],
   reviewComments: PullRequestReviewComment[],
   dependencies: ReviewFixDependencies,
 ): SourcedComment[] {
-  return [
-    ...conversationComments.map((comment) => ({
-      source: "conversation" as const,
-      comment,
-    })),
-    ...reviewComments.map((comment) => ({
+  return reviewComments
+    .map((comment) => ({
       source: "review" as const,
       comment,
-    })),
-  ].filter((value) => isMonkeyScanComment(value.comment, dependencies));
+    }))
+    .filter((value) => isMonkeyScanComment(value.comment, dependencies));
 }
 
 function isMonkeyScanComment(

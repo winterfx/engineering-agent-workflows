@@ -1,0 +1,11 @@
+FROM golang:1.26.4-alpine AS go-toolchain
+
+FROM agent-compose-guest:local
+
+COPY --from=go-toolchain /usr/local/go /usr/local/go
+
+ENV PATH=/usr/local/go/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN ln -s /usr/local/go/bin/go /usr/local/bin/go \
+    && ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt \
+    && go version

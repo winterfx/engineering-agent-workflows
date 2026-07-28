@@ -47,7 +47,9 @@ export function buildDraftPrStatusComment(
     );
   }
 
-  const reasons = (details.reasons ?? []).map(sanitizeLine).filter(Boolean);
+  const reasons = (details.reasons ?? [])
+    .map(sanitizeFailureReason)
+    .filter(Boolean);
   if (reasons.length > 0) {
     lines.push("", "### Attention", "");
     for (const reason of reasons.slice(0, 8)) lines.push(`- ${reason}`);
@@ -63,5 +65,17 @@ function sanitizeLine(value: string): string {
     .replace(/[\r\n]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
+    .slice(0, 500);
+}
+
+export function sanitizeFailureReason(value: string): string {
+  return sanitizeLine(value)
+    .replace(
+      /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
+      "<redacted-token>",
+    )
+    .replace(/(Authorization\s*:\s*)(?:Bearer|token)\s+\S+/gi, "$1<redacted>")
+    .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1<redacted>@")
+    .replace(/([?&](?:access_token|token)=)[^&\s]+/gi, "$1<redacted>")
     .slice(0, 500);
 }

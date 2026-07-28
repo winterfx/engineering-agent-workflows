@@ -8,6 +8,7 @@ import type {
 import {
   applyReviewFix,
   listReviewFixTargets,
+  monkeyScanEventAuthorReason,
   prepareReviewFix,
   type ReviewFixDependencies,
 } from "../src/draft-pr/review-tool.js";
@@ -243,7 +244,7 @@ describe("Draft PR MonkeyScan review fix", () => {
     expect(status.body).toContain("status=fixed");
   });
 
-  it("batches conversation and review comments without conflating equal IDs", async () => {
+  it("ignores PR conversation comments while processing inline review comments", async () => {
     const provider = new FakeProvider();
     provider.comments.unshift(
       monkeyComment(10, "Conversation-level recovery finding."),
@@ -263,10 +264,7 @@ describe("Draft PR MonkeyScan review fix", () => {
         source,
         commentId,
       })),
-    ).toEqual([
-      { source: "conversation", commentId: 10 },
-      { source: "review", commentId: 10 },
-    ]);
+    ).toEqual([{ source: "review", commentId: 10 }]);
 
     const result = await applyReviewFix(
       repository,
@@ -279,10 +277,10 @@ describe("Draft PR MonkeyScan review fix", () => {
     expect(workspace.commitCalls).toBe(1);
     expect(
       provider.comments.find((comment) => comment.id === 1000)?.body,
-    ).toContain("conversation=10 review=10 iterations=1");
+    ).toContain("conversation=0 review=10 iterations=1");
   });
 
-  it("uses the managed cursor to avoid replaying an older comment", async () => {
+  it("does not treat MonkeyScan PR conversation comments as findings", async () => {
     const provider = new FakeProvider();
     provider.reviewComments = [];
     provider.comments.unshift(
@@ -302,13 +300,13 @@ describe("Draft PR MonkeyScan review fix", () => {
       dependencies(provider, workspace),
     );
 
-    expect(prepared.findings?.map((finding) => finding.commentId)).toEqual([
-      11,
-    ]);
-    expect(prepared.findings?.[0]?.source).toBe("conversation");
-    expect(prepared.previousConversationCursor).toBe(10);
-    expect(prepared.previousReviewCursor).toBe(0);
-    expect(prepared.previousIterations).toBe(1);
+    expect(prepared).toEqual(
+      expect.objectContaining({
+        skipped: true,
+        reason: "no unprocessed MonkeyScan review comments",
+      }),
+    );
+    expect(workspace.preparedReviewCalls).toBe(0);
   });
 
   it("rejects a changed Pull Request head before pushing", async () => {
@@ -338,6 +336,50 @@ describe("Draft PR MonkeyScan review fix", () => {
     );
 
     expect(result.targets).toEqual([{ pullRequestNumber, headSha }]);
+  });
+
+  it("validates webhook authors against the configured MonkeyScan identity", () => {
+    const deps = dependencies(new FakeProvider(), new FakeWorkspace());
+
+    expect(
+      monkeyScanEventAuthorReason(
+        monkeyScanBotLogin.toUpperCase(),
+        monkeyScanBotUserId,
+        deps,
+      ),
+    ).toBeUndefined();
+    expect(monkeyScanEventAuthorReason("maintainer", 42, deps)).toBe(
+      "review author is not MonkeyScan",
+    );
+    expect(monkeyScanEventAuthorReason(monkeyScanBotLogin, 42, deps)).toBe(
+      "MonkeyScan user ID mismatch",
+    );
+    deps.botLogin = monkeyScanBotLogin;
+    expect(
+      monkeyScanEventAuthorReason(
+        monkeyScanBotLogin,
+        monkeyScanBotUserId,
+        deps,
+      ),
+    ).toBe("workflow status comment is not a MonkeyScan finding");
+  });
+
+  it("skips reconciliation in dry-run before validating or listing targets", async () => {
+    const provider = new FakeProvider();
+    const workspace = new FakeWorkspace();
+    const deps = dependencies(provider, workspace);
+    deps.apply = false;
+    deps.allowedRepository = "";
+
+    const result = await listReviewFixTargets("", deps);
+
+    expect(result).toEqual({
+      ok: true,
+      ignored: true,
+      reason: "review reconciliation is disabled in dry-run",
+      repository: "",
+      targets: [],
+    });
   });
 
   it("rejects identical scanner and workflow bot identities", async () => {

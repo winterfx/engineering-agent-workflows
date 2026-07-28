@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const reviewCommentSourceSchema = z.enum(["conversation", "review"]);
+export const reviewCommentSourceSchema = z.literal("review");
 
 const reviewCommentReferenceSchema = z.object({
   source: reviewCommentSourceSchema,

@@ -114,6 +114,8 @@ describe("GitLab scheduler script", () => {
   it("routes GitHub Issue events and ignores pull requests", async () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     const providers: string[] = [];
+    const toolProviders: string[] = [];
+    const senderLogins: string[] = [];
     const context = vm.createContext({
       scheduler: {
         on(
@@ -125,6 +127,8 @@ describe("GitLab scheduler script", () => {
         },
         shell(_script: string, options: { env: Record<string, string> }) {
           providers.push(options.env.TRIAGE_PROVIDER ?? "");
+          toolProviders.push(options.env.ISSUE_TRIAGE_PROVIDER ?? "");
+          senderLogins.push(options.env.TRIAGE_SENDER_LOGIN ?? "");
           const result =
             options.env.TRIAGE_COMMAND === "prepare"
               ? {
@@ -228,6 +232,8 @@ describe("GitLab scheduler script", () => {
       "github",
       "github",
     ]);
+    expect(toolProviders).toEqual(providers);
+    expect(senderLogins).toEqual(["", "", "", "", "", ""]);
   });
 });
 

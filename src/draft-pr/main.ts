@@ -14,8 +14,10 @@ import { applyCiFix, failCiFix, prepareCiFix } from "./ci-tool.js";
 import { draftPrPolicySchema, type DraftPrPolicy } from "./policy.js";
 import {
   applyReviewFix,
+  dryRunReviewReconciliation,
   failReviewFix,
   listReviewFixTargets,
+  monkeyScanEventAuthorReason,
   prepareReviewFix,
 } from "./review-tool.js";
 import { assertBoundDraftPrTarget, assertBoundReviewTarget } from "./target.js";
@@ -46,12 +48,18 @@ interface CLIOptions {
   headSha?: string;
   checkSuiteId?: number;
   attempts?: number;
+  eventAuthorLogin?: string;
+  eventAuthorId?: number;
 }
 
 async function main(): Promise<void> {
   const options = parseArguments(process.argv.slice(2));
   const policy = await loadPolicy();
   const apply = envBoolean(process.env.DRAFT_PR_APPLY);
+  const allowedRepository =
+    process.env.DRAFT_PR_ALLOWED_REPOSITORY?.trim() ||
+    process.env.GITHUB_ALLOWED_REPOSITORY?.trim() ||
+    "";
   if (["prepare", "apply", "fail"].includes(options.command)) {
     assertBoundDraftPrTarget(
       options.repository,
@@ -66,6 +74,12 @@ async function main(): Promise<void> {
       apply,
       process.env,
     );
+  }
+  if (options.command === "list-review-targets" && !apply) {
+    process.stdout.write(
+      `${JSON.stringify(dryRunReviewReconciliation(allowedRepository), null, 2)}\n`,
+    );
+    return;
   }
   const token = process.env.GITHUB_TOKEN?.trim() ?? "";
   const provider = new GitHubClient({
@@ -83,15 +97,15 @@ async function main(): Promise<void> {
     authorEmail:
       process.env.DRAFT_PR_GIT_AUTHOR_EMAIL?.trim() ||
       "engineering-agent-workflows@users.noreply.github.com",
+    ...(process.env.DRAFT_PR_GIT_CURL_RESOLVE
+      ? { gitCurlResolve: process.env.DRAFT_PR_GIT_CURL_RESOLVE }
+      : {}),
   });
   const dependencies = {
     provider,
     workspace,
     policy,
-    allowedRepository:
-      process.env.DRAFT_PR_ALLOWED_REPOSITORY?.trim() ||
-      process.env.GITHUB_ALLOWED_REPOSITORY?.trim() ||
-      "",
+    allowedRepository,
     serverUrl: process.env.GITHUB_SERVER_URL?.trim() || "https://github.com",
     apply,
     ...(process.env.GITHUB_BOT_LOGIN
@@ -102,6 +116,18 @@ async function main(): Promise<void> {
       ? { monkeyScanBotUserId: Number(process.env.MONKEYSCAN_BOT_USER_ID) }
       : {}),
   };
+  const reviewRepository =
+    options.command === "list-review-targets" && !options.repository
+      ? dependencies.allowedRepository
+      : options.repository;
+  const reviewEventReason =
+    options.command === "prepare-review" && options.eventAuthorLogin
+      ? monkeyScanEventAuthorReason(
+          options.eventAuthorLogin,
+          options.eventAuthorId,
+          dependencies,
+        )
+      : undefined;
 
   const result =
     options.command === "prepare"
@@ -128,13 +154,21 @@ async function main(): Promise<void> {
               dependencies,
             )
           : options.command === "list-review-targets"
-            ? await listReviewFixTargets(options.repository, dependencies)
+            ? await listReviewFixTargets(reviewRepository, dependencies)
             : options.command === "prepare-review"
-              ? await prepareReviewFix(
-                  options.repository,
-                  options.pullRequestNumber!,
-                  dependencies,
-                )
+              ? reviewEventReason
+                ? {
+                    ok: true,
+                    skipped: true,
+                    reason: reviewEventReason,
+                    repository: options.repository,
+                    pullRequestNumber: options.pullRequestNumber!,
+                  }
+                : await prepareReviewFix(
+                    options.repository,
+                    options.pullRequestNumber!,
+                    dependencies,
+                  )
               : options.command === "apply-review"
                 ? await applyReviewFix(
                     options.repository,
@@ -221,6 +255,8 @@ function parseArguments(args: string[]): CLIOptions {
   let headSha = "";
   let checkSuiteId = 0;
   let attempts = 0;
+  let eventAuthorLogin = "";
+  let eventAuthorId = -1;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--repository") {
@@ -251,11 +287,15 @@ function parseArguments(args: string[]): CLIOptions {
       checkSuiteId = Number(requiredArgumentValue(args, ++index, argument));
     } else if (argument === "--attempts") {
       attempts = Number(requiredArgumentValue(args, ++index, argument));
+    } else if (argument === "--event-author-login") {
+      eventAuthorLogin = requiredArgumentValue(args, ++index, argument);
+    } else if (argument === "--event-author-id") {
+      eventAuthorId = Number(requiredArgumentValue(args, ++index, argument));
     } else {
       throw new Error(`unknown argument: ${argument}`);
     }
   }
-  if (!isProjectPath(repository)) {
+  if (!isProjectPath(repository) && command !== "list-review-targets") {
     throw new Error("--repository must use owner/repository format");
   }
   if (
@@ -304,6 +344,10 @@ function parseArguments(args: string[]): CLIOptions {
       ? { checkSuiteId }
       : {}),
     ...(Number.isSafeInteger(attempts) && attempts >= 0 ? { attempts } : {}),
+    ...(eventAuthorLogin ? { eventAuthorLogin } : {}),
+    ...(Number.isSafeInteger(eventAuthorId) && eventAuthorId >= 0
+      ? { eventAuthorId }
+      : {}),
   };
 }
 
