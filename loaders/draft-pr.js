@@ -454,7 +454,6 @@ function runReviewFix(repository, pullRequestNumber, reviewId) {
         sandboxEnv: {
           GITHUB_TOKEN: "",
           GH_TOKEN: "",
-          GITLAB_TOKEN: "",
           DRAFT_PR_APPLY: "0",
         },
         volumes: [agentWorkspaceVolume(prepared.workspacePath)],
@@ -535,7 +534,6 @@ function runCiFix(repository, pullRequestNumber, headSha, checkSuiteId) {
         sandboxEnv: {
           GITHUB_TOKEN: "",
           GH_TOKEN: "",
-          GITLAB_TOKEN: "",
           DRAFT_PR_APPLY: "0",
         },
         volumes: [agentWorkspaceVolume(prepared.workspacePath)],
@@ -649,7 +647,6 @@ function handleGitHubIssue(event) {
         sandboxEnv: {
           GITHUB_TOKEN: "",
           GH_TOKEN: "",
-          GITLAB_TOKEN: "",
           DRAFT_PR_APPLY: "0",
         },
         volumes: [agentWorkspaceVolume(prepared.workspacePath)],

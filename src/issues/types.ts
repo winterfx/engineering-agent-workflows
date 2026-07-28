@@ -32,6 +32,6 @@ export interface IssueCandidate {
   url: string;
 }
 
-export function isProjectPath(value: string): boolean {
-  return /^[^/\s]+(?:\/[^/\s]+)+$/.test(value);
+export function isRepositorySlug(value: string): boolean {
+  return /^[^/\s]+\/[^/\s]+$/.test(value);
 }

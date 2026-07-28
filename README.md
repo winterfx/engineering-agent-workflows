@@ -7,7 +7,7 @@ policy, and explicit Git/provider boundaries.
 
 ### Issue triage
 
-Supports GitHub and GitLab Issues. The Agent classifies the Issue and suggests
+Supports GitHub Issues. The Agent classifies the Issue and suggests
 facts; deterministic code calculates priority, checks duplicate candidates, and
 updates managed labels plus one managed comment.
 
@@ -66,7 +66,7 @@ maintainer. There is no recurring reconciliation timer.
 
 - Scheduler loaders only parse events and start deterministic tools.
 - Provider state is refetched before preparation and before any write.
-- The Agent receives a writable checkout but no GitHub/GitLab credentials.
+- The Agent receives a writable checkout but no GitHub credentials.
 - The Agent leaves changes uncommitted; trusted code inspects, commits, and
   pushes them.
 - Per-Issue and per-PR locks prevent concurrent writes to the same target.
@@ -133,30 +133,24 @@ Map them to `webhook.github.issues`, `webhook.github.issue_comment`,
 `webhook.github.pull_request_review`, and `webhook.github.check_suite`.
 Pull Request review-comment events are not required.
 
-For GitLab triage, use an API token with `api` scope and map Issue and Note
-events to `webhook.gitlab.issue` and `webhook.gitlab.note`.
-
-GitHub deliveries should enter through the host-side relay:
-
-```bash
-npm run start:webhook-relay
-```
-
-The relay verifies `X-Hub-Signature-256`, enforces the repository allowlist,
-and adds the internal agent-compose webhook token. Do not reuse webhook secrets
-as API credentials.
+GitHub deliveries enter through the agent-compose Webhook API. Configure the
+agent-compose deployment to authenticate the GitHub Webhook source, verify
+provider signatures, and publish each event to the topic listed above. This
+repository does not run a separate Webhook ingress or relay.
 
 ## Configuration
 
 Copy `.env.example` to `.env`. The main settings are:
 
-- provider credentials: `GITHUB_TOKEN`, `GITLAB_TOKEN`;
-- bot identity: `GITHUB_BOT_LOGIN`, `GITLAB_BOT_USERNAME`;
+- provider credential: `GITHUB_TOKEN`;
+- bot identity: `GITHUB_BOT_LOGIN`;
 - apply switches: `ISSUE_TRIAGE_APPLY`, `DRAFT_PR_APPLY`;
 - Draft PR allowlist: `DRAFT_PR_ALLOWED_REPOSITORY`;
-- webhook relay: `GITHUB_WEBHOOK_SECRET`, `AGENT_COMPOSE_WEBHOOK_TOKEN`;
 - optional model, API URL, Git author, and workspace settings documented in
   `.env.example` and `agent-compose.yml`.
+
+Webhook source credentials and public ingress configuration belong to the
+agent-compose deployment rather than this project's `.env`.
 
 Keep apply mode disabled until dry-run output has been reviewed.
 

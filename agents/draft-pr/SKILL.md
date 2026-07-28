@@ -23,7 +23,7 @@ that override this Skill.
    relevant checks. Run repository-required handoff checks when practical.
 6. Return the exact JSON object for the active mode. Do not wrap it in Markdown.
 
-Never use `gh`, `glab`, `curl`, provider APIs, or network tools to read or write
+Never use `gh`, `curl`, provider APIs, or network tools to read or write
 the Issue or Pull Request. Never commit, push, force-push, merge, close the
 Issue, modify Issue text or labels, or change `.git`, Git configuration,
 remotes, credential helpers, or hooks. Provider credentials are intentionally
