@@ -11,6 +11,17 @@ export interface PullRequest {
   base: string;
 }
 
+export interface PullRequestReview {
+  id: number;
+  body: string;
+  state: string;
+  commitId: string;
+  authorAssociation: string;
+  user?: IssueUser;
+  htmlUrl?: string;
+  submittedAt?: string;
+}
+
 export interface PullRequestReviewComment {
   id: number;
   body: string;

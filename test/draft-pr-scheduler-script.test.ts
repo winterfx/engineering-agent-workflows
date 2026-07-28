@@ -43,14 +43,16 @@ describe("Draft PR Scheduler script", () => {
           agentOptions = options;
           return {
             success: true,
-            finalText: JSON.stringify({
-              outcome: "implemented",
-              prTitle: "fix(webhooks): avoid ambiguous commit results",
-              summary: ["Return the committed event."],
-              tests: [],
-              risk: { level: "low", reasons: [] },
-              notes: [],
-            }),
+            text:
+              "Agent progress with {embedded: 'text'}\n" +
+              JSON.stringify({
+                outcome: "implemented",
+                prTitle: "fix(webhooks): avoid ambiguous commit results",
+                summary: ["Return the committed event."],
+                tests: [],
+                risk: { level: "low", reasons: [] },
+                notes: [],
+              }),
           };
         },
       },
@@ -132,9 +134,47 @@ describe("Draft PR Scheduler script", () => {
     expect(calls).toBe(0);
   });
 
+  it("registers Review and CI triggers without PR comments or reconciliation", async () => {
+    const topics: string[] = [];
+    const triggerIDs: string[] = [];
+    const intervalIDs: string[] = [];
+    const context = vm.createContext({
+      scheduler: {
+        on(
+          topic: string,
+          triggerID: string,
+          _handler: (event: unknown) => unknown,
+        ) {
+          topics.push(topic);
+          triggerIDs.push(triggerID);
+        },
+        interval(triggerID: string) {
+          intervalIDs.push(triggerID);
+        },
+      },
+    });
+
+    new vm.Script(await schedulerScript()).runInContext(context);
+
+    expect(topics).toEqual([
+      "webhook.github.issues",
+      "webhook.github.pull_request_review",
+      "webhook.github.check_suite",
+    ]);
+    expect(topics).not.toContain("webhook.github.issue_comment");
+    expect(topics).not.toContain("webhook.github.pull_request_review_comment");
+    expect(triggerIDs).toEqual([
+      "github-draft-pr-v1",
+      "github-draft-pr-requested-changes-v1",
+      "github-draft-pr-ci-fix-v1",
+    ]);
+    expect(intervalIDs).toEqual([]);
+  });
+
   it("records agent failures through the deterministic tool", async () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     const commands: string[] = [];
+    let failureMessage = "";
     const context = vm.createContext({
       scheduler: {
         on(
@@ -147,6 +187,9 @@ describe("Draft PR Scheduler script", () => {
         interval() {},
         shell(_script: string, options: { env: Record<string, string> }) {
           commands.push(options.env.DRAFT_PR_COMMAND ?? "");
+          if (options.env.DRAFT_PR_COMMAND === "fail") {
+            failureMessage = options.env.DRAFT_PR_FAILURE ?? "";
+          }
           const result =
             options.env.DRAFT_PR_COMMAND === "prepare"
               ? {
@@ -181,20 +224,15 @@ describe("Draft PR Scheduler script", () => {
     });
 
     expect(commands).toEqual(["prepare", "fail"]);
+    expect(failureMessage).toBe("agent failed");
     expect(result).toEqual({ ok: true, applied: true, outcome: "failed" });
   });
 
-  it("batches MonkeyScan PR comments through review prepare and apply", async () => {
+  it("routes a requested-changes Review into one review-fix batch", async () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     const commands: string[] = [];
-    let reviewAgentOptions: Record<string, unknown> = {};
+    const calls: Array<Record<string, string>> = [];
     const context = vm.createContext({
-      process: {
-        env: {
-          MONKEYSCAN_BOT_LOGIN: "monkeyscan[bot]",
-          MONKEYSCAN_BOT_USER_ID: "9001",
-        },
-      },
       scheduler: {
         on(
           topic: string,
@@ -205,6 +243,7 @@ describe("Draft PR Scheduler script", () => {
         },
         interval() {},
         shell(_script: string, options: { env: Record<string, string> }) {
+          calls.push(options.env);
           const command = options.env.DRAFT_PR_COMMAND ?? "";
           commands.push(command);
           const result =
@@ -218,152 +257,22 @@ describe("Draft PR Scheduler script", () => {
                   branch: "codex/issue-439",
                   baseBranch: "main",
                   expectedHeadSha: "a".repeat(40),
-                  commentsFingerprint: "b".repeat(20),
-                  previousConversationCursor: 0,
+                  reviewId: 700,
+                  reviewFingerprint: "b".repeat(20),
                   previousReviewCursor: 0,
                   previousIterations: 0,
                   findings: [
                     {
                       source: "review",
-                      commentId: 10,
-                      body: "first finding",
+                      commentId: 700,
+                      body: "Please address the recovery behavior.",
                     },
                     {
-                      source: "review",
-                      commentId: 11,
-                      body: "second finding",
-                    },
-                  ],
-                }
-              : { ok: true, applied: true, outcome: "fixed" };
-          return { success: true, stdout: JSON.stringify(result) };
-        },
-        agent(_prompt: string, options: Record<string, unknown>) {
-          reviewAgentOptions = options;
-          return {
-            success: true,
-            finalText: JSON.stringify({
-              outcome: "fixed",
-              commitTitle: "fix: address MonkeyScan findings",
-              summary: ["Address both findings."],
-              findings: [10, 11].map((commentId) => ({
-                source: "review",
-                commentId,
-                disposition: "fixed",
-                reason: "Covered by tests.",
-              })),
-              tests: [],
-              risk: { level: "low", reasons: [] },
-              notes: [],
-            }),
-          };
-        },
-      },
-    });
-    new vm.Script(await schedulerScript()).runInContext(context);
-
-    const result = handlers.get("webhook.github.issue_comment")?.({
-      payload: {
-        body: {
-          action: "created",
-          issue: { number: 440, pull_request: { url: "pull" } },
-          comment: {
-            id: 11,
-            user: { login: "monkeyscan[bot]", id: 9001 },
-          },
-          repository: { full_name: "chaitin/agent-compose" },
-        },
-      },
-    });
-
-    expect(commands).toEqual(["prepare-review", "apply-review"]);
-    expect(result).toEqual({ ok: true, applied: true, outcome: "fixed" });
-    expect(reviewAgentOptions.volumes).toEqual([
-      expect.objectContaining({
-        source: "./.draft-pr-workspaces/repositories/0123456789abcdef/pr-440",
-        readOnly: false,
-      }),
-    ]);
-  });
-
-  it.each([
-    {
-      topic: "webhook.github.pull_request_review_comment",
-      body: {
-        action: "created",
-        pull_request: { number: 440 },
-        comment: {
-          id: 11,
-          user: { login: "monkeyscan[bot]", id: 9001 },
-        },
-        repository: { full_name: "chaitin/agent-compose" },
-      },
-    },
-    {
-      topic: "webhook.github.pull_request_review",
-      body: {
-        action: "submitted",
-        pull_request: { number: 440 },
-        review: {
-          id: 700,
-          user: { login: "monkeyscan[bot]", id: 9001 },
-        },
-        repository: { full_name: "chaitin/agent-compose" },
-      },
-    },
-  ])("routes MonkeyScan $topic into one review-fix batch", async (fixture) => {
-    const handlers = new Map<string, (event: unknown) => unknown>();
-    const commands: string[] = [];
-    const context = vm.createContext({
-      process: {
-        env: {
-          MONKEYSCAN_BOT_LOGIN: "monkeyscan[bot]",
-          MONKEYSCAN_BOT_USER_ID: "9001",
-        },
-      },
-      scheduler: {
-        on(
-          topic: string,
-          _triggerID: string,
-          handler: (event: unknown) => unknown,
-        ) {
-          handlers.set(topic, handler);
-        },
-        interval() {},
-        shell(_script: string, options: { env: Record<string, string> }) {
-          const command = options.env.DRAFT_PR_COMMAND ?? "";
-          commands.push(command);
-          const result =
-            command === "prepare-review"
-              ? {
-                  ok: true,
-                  repository: "chaitin/agent-compose",
-                  pullRequestNumber: 440,
-                  workspacePath:
-                    "/draft-pr-workspaces/repositories/0123456789abcdef/pr-440",
-                  branch: "codex/issue-439",
-                  baseBranch: "main",
-                  expectedHeadSha: "a".repeat(40),
-                  commentsFingerprint: "b".repeat(20),
-                  previousConversationCursor: 0,
-                  previousReviewCursor: 0,
-                  previousIterations: 0,
-                  findings: [
-                    {
-                      source: "review",
+                      source: "review_comment",
                       commentId: 10,
                       path: "pkg/sessions/deletion_recovery.go",
                       line: 104,
-                      diffHunk: "@@ -100,0 +101,4 @@",
-                      body: "first inline finding",
-                    },
-                    {
-                      source: "review",
-                      commentId: 11,
-                      path: "pkg/sessions/deletion_recovery_test.go",
-                      line: 40,
-                      diffHunk: "@@ -36,0 +37,4 @@",
-                      body: "second inline finding",
+                      body: "Inline finding",
                     },
                   ],
                 }
@@ -375,14 +284,22 @@ describe("Draft PR Scheduler script", () => {
             success: true,
             finalText: JSON.stringify({
               outcome: "fixed",
-              commitTitle: "fix: address inline MonkeyScan findings",
-              summary: ["Address both inline findings."],
-              findings: [10, 11].map((commentId) => ({
-                source: "review",
-                commentId,
-                disposition: "fixed",
-                reason: "Covered by tests.",
-              })),
+              commitTitle: "fix: address requested changes",
+              summary: ["Address the Review findings."],
+              findings: [
+                {
+                  source: "review",
+                  commentId: 700,
+                  disposition: "fixed",
+                  reason: "Covered by tests.",
+                },
+                {
+                  source: "review_comment",
+                  commentId: 10,
+                  disposition: "fixed",
+                  reason: "Covered by tests.",
+                },
+              ],
               tests: [],
               risk: { level: "low", reasons: [] },
               notes: [],
@@ -393,24 +310,69 @@ describe("Draft PR Scheduler script", () => {
     });
     new vm.Script(await schedulerScript()).runInContext(context);
 
-    const result = handlers.get(fixture.topic)?.({
-      payload: { body: fixture.body },
+    const result = handlers.get("webhook.github.pull_request_review")?.({
+      payload: {
+        body: {
+          action: "submitted",
+          pull_request: { number: 440 },
+          review: { id: 700, state: "changes_requested" },
+          repository: { full_name: "chaitin/agent-compose" },
+        },
+      },
     });
 
     expect(commands).toEqual(["prepare-review", "apply-review"]);
+    expect(calls[0]).toEqual(
+      expect.objectContaining({ DRAFT_PR_REVIEW_ID: "700" }),
+    );
     expect(result).toEqual({ ok: true, applied: true, outcome: "fixed" });
   });
+
+  it.each(["approved", "commented"])(
+    "ignores a submitted %s Review",
+    async (state) => {
+      const handlers = new Map<string, (event: unknown) => unknown>();
+      let calls = 0;
+      const context = vm.createContext({
+        scheduler: {
+          on(
+            topic: string,
+            _triggerID: string,
+            handler: (event: unknown) => unknown,
+          ) {
+            handlers.set(topic, handler);
+          },
+          shell() {
+            calls += 1;
+          },
+        },
+      });
+      new vm.Script(await schedulerScript()).runInContext(context);
+
+      const result = handlers.get("webhook.github.pull_request_review")?.({
+        payload: {
+          body: {
+            action: "submitted",
+            pull_request: { number: 440 },
+            review: { id: 700, state },
+            repository: { full_name: "chaitin/agent-compose" },
+          },
+        },
+      });
+
+      expect(result).toEqual({
+        ok: true,
+        ignored: true,
+        reason: "Review is not a change request",
+      });
+      expect(calls).toBe(0);
+    },
+  );
 
   it("preserves the review cursor when an Agent attempt fails", async () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     const calls: Array<Record<string, string>> = [];
     const context = vm.createContext({
-      process: {
-        env: {
-          MONKEYSCAN_BOT_LOGIN: "monkeyscan[bot]",
-          MONKEYSCAN_BOT_USER_ID: "9001",
-        },
-      },
       scheduler: {
         on(
           topic: string,
@@ -433,20 +395,15 @@ describe("Draft PR Scheduler script", () => {
                   branch: "codex/issue-439",
                   baseBranch: "main",
                   expectedHeadSha: "a".repeat(40),
-                  commentsFingerprint: "b".repeat(20),
-                  previousConversationCursor: 7,
+                  reviewId: 700,
+                  reviewFingerprint: "b".repeat(20),
                   previousReviewCursor: 3,
                   previousIterations: 1,
                   findings: [
                     {
                       source: "review",
-                      commentId: 10,
-                      body: "first finding",
-                    },
-                    {
-                      source: "review",
-                      commentId: 11,
-                      body: "second finding",
+                      commentId: 700,
+                      body: "Requested changes.",
                     },
                   ],
                 }
@@ -460,15 +417,12 @@ describe("Draft PR Scheduler script", () => {
     });
     new vm.Script(await schedulerScript()).runInContext(context);
 
-    const result = handlers.get("webhook.github.issue_comment")?.({
+    const result = handlers.get("webhook.github.pull_request_review")?.({
       payload: {
         body: {
-          action: "created",
-          issue: { number: 440, pull_request: { url: "pull" } },
-          comment: {
-            id: 11,
-            user: { login: "monkeyscan[bot]", id: 9001 },
-          },
+          action: "submitted",
+          pull_request: { number: 440 },
+          review: { id: 700, state: "changes_requested" },
           repository: { full_name: "chaitin/agent-compose" },
         },
       },
@@ -480,7 +434,6 @@ describe("Draft PR Scheduler script", () => {
     ]);
     expect(calls[1]).toEqual(
       expect.objectContaining({
-        DRAFT_PR_CONVERSATION_CURSOR: "7",
         DRAFT_PR_REVIEW_CURSOR: "3",
         DRAFT_PR_REVIEW_ITERATIONS: "2",
         DRAFT_PR_REVIEW_HEAD: "a".repeat(40),
@@ -493,12 +446,6 @@ describe("Draft PR Scheduler script", () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     const commands: string[] = [];
     const context = vm.createContext({
-      process: {
-        env: {
-          MONKEYSCAN_BOT_LOGIN: "monkeyscan[bot]",
-          MONKEYSCAN_BOT_USER_ID: "9001",
-        },
-      },
       scheduler: {
         on(
           topic: string,
@@ -520,118 +467,18 @@ describe("Draft PR Scheduler script", () => {
     new vm.Script(await schedulerScript()).runInContext(context);
 
     expect(() =>
-      handlers.get("webhook.github.issue_comment")?.({
+      handlers.get("webhook.github.pull_request_review")?.({
         payload: {
           body: {
-            action: "created",
-            issue: { number: 440, pull_request: { url: "pull" } },
-            comment: {
-              id: 11,
-              user: { login: "monkeyscan[bot]", id: 9001 },
-            },
+            action: "submitted",
+            pull_request: { number: 440 },
+            review: { id: 700, state: "changes_requested" },
             repository: { full_name: "chaitin/agent-compose" },
           },
         },
       }),
     ).toThrow("Draft PR review tool failed");
     expect(commands).toEqual(["prepare-review"]);
-  });
-
-  it("reconciles a pending comment whose overlapping webhook was skipped", async () => {
-    let intervalHandler: (() => unknown) | undefined;
-    const commands: string[] = [];
-    const context = vm.createContext({
-      process: {
-        env: {
-          DRAFT_PR_APPLY: "1",
-          DRAFT_PR_ALLOWED_REPOSITORY: "chaitin/agent-compose",
-          MONKEYSCAN_BOT_LOGIN: "monkeyscan[bot]",
-          MONKEYSCAN_BOT_USER_ID: "9001",
-        },
-      },
-      scheduler: {
-        on() {},
-        interval(
-          _triggerID: string,
-          handler: () => unknown,
-          _milliseconds: number,
-        ) {
-          intervalHandler = handler;
-        },
-        shell(_script: string, options: { env: Record<string, string> }) {
-          const command = options.env.DRAFT_PR_COMMAND ?? "";
-          commands.push(command);
-          const result =
-            command === "list-review-targets"
-              ? {
-                  ok: true,
-                  repository: "chaitin/agent-compose",
-                  targets: [
-                    { pullRequestNumber: 440, headSha: "a".repeat(40) },
-                  ],
-                }
-              : command === "prepare-review"
-                ? {
-                    ok: true,
-                    repository: "chaitin/agent-compose",
-                    pullRequestNumber: 440,
-                    workspacePath:
-                      "/draft-pr-workspaces/repositories/0123456789abcdef/pr-440",
-                    branch: "codex/issue-439",
-                    baseBranch: "main",
-                    expectedHeadSha: "a".repeat(40),
-                    commentsFingerprint: "b".repeat(20),
-                    previousConversationCursor: 4,
-                    previousReviewCursor: 11,
-                    previousIterations: 1,
-                    findings: [
-                      {
-                        source: "review",
-                        commentId: 12,
-                        body: "late finding",
-                      },
-                    ],
-                  }
-                : { ok: true, applied: true, outcome: "fixed" };
-          return { success: true, stdout: JSON.stringify(result) };
-        },
-        agent() {
-          return {
-            success: true,
-            finalText: JSON.stringify({
-              outcome: "fixed",
-              commitTitle: "fix: address late MonkeyScan finding",
-              summary: ["Address the late finding."],
-              findings: [
-                {
-                  source: "review",
-                  commentId: 12,
-                  disposition: "fixed",
-                  reason: "Covered by tests.",
-                },
-              ],
-              tests: [],
-              risk: { level: "low", reasons: [] },
-              notes: [],
-            }),
-          };
-        },
-      },
-    });
-    new vm.Script(await schedulerScript()).runInContext(context);
-
-    const result = intervalHandler?.();
-
-    expect(commands).toEqual([
-      "list-review-targets",
-      "prepare-review",
-      "apply-review",
-    ]);
-    expect(result).toEqual({
-      ok: true,
-      repository: "chaitin/agent-compose",
-      results: [{ ok: true, applied: true, outcome: "fixed" }],
-    });
   });
 
   it("routes a completed failed check suite through CI prepare and apply", async () => {
@@ -641,7 +488,6 @@ describe("Draft PR Scheduler script", () => {
     let agentOptions: Record<string, unknown> = {};
     const headSha = "a".repeat(40);
     const context = vm.createContext({
-      process: { env: {} },
       scheduler: {
         on(
           topic: string,

@@ -224,7 +224,11 @@ function handleEvent(event, provider, expectedKind, supportedActions, github) {
     if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0) {
       return { ok: true, ignored: true, reason: "invalid issue.number" };
     }
-    const senderLogin = String(body.sender?.login || "");
+    // The configured GitHub token may belong to the same user who authors or
+    // edits Issues. Issue-side bot label writes are already filtered above, so
+    // only comment events need the sender guard that prevents feedback loops.
+    const senderLogin =
+      expectedKind === "comment" ? String(body.sender?.login || "") : "";
     return triageEvent(provider, repository, issueNumber, senderLogin);
   }
 

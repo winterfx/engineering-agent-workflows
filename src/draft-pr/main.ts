@@ -3,11 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { GitHubClient } from "../github/client.js";
 import { isProjectPath } from "../issues/types.js";
-import {
-  envBoolean,
-  isPositiveInteger,
-  requiredArgumentValue,
-} from "../runtime/cli.js";
+import { envBoolean, requiredArgumentValue } from "../runtime/cli.js";
 import { errorMessage } from "../runtime/errors.js";
 import { loadJsonFromCandidates } from "../runtime/load-json.js";
 import { applyCiFix, failCiFix, prepareCiFix } from "./ci-tool.js";
@@ -15,7 +11,6 @@ import { draftPrPolicySchema, type DraftPrPolicy } from "./policy.js";
 import {
   applyReviewFix,
   failReviewFix,
-  listReviewFixTargets,
   prepareReviewFix,
 } from "./review-tool.js";
 import { assertBoundDraftPrTarget, assertBoundReviewTarget } from "./target.js";
@@ -27,7 +22,6 @@ interface CLIOptions {
     | "prepare"
     | "apply"
     | "fail"
-    | "list-review-targets"
     | "prepare-review"
     | "apply-review"
     | "fail-review"
@@ -40,7 +34,7 @@ interface CLIOptions {
   trigger?: "ready" | "approved";
   analysisFile?: string;
   message?: string;
-  conversationCursor?: number;
+  reviewId?: number;
   reviewCursor?: number;
   iterations?: number;
   headSha?: string;
@@ -52,6 +46,10 @@ async function main(): Promise<void> {
   const options = parseArguments(process.argv.slice(2));
   const policy = await loadPolicy();
   const apply = envBoolean(process.env.DRAFT_PR_APPLY);
+  const allowedRepository =
+    process.env.DRAFT_PR_ALLOWED_REPOSITORY?.trim() ||
+    process.env.GITHUB_ALLOWED_REPOSITORY?.trim() ||
+    "";
   if (["prepare", "apply", "fail"].includes(options.command)) {
     assertBoundDraftPrTarget(
       options.repository,
@@ -59,7 +57,7 @@ async function main(): Promise<void> {
       apply,
       process.env,
     );
-  } else if (options.command !== "list-review-targets") {
+  } else {
     assertBoundReviewTarget(
       options.repository,
       options.pullRequestNumber!,
@@ -83,23 +81,19 @@ async function main(): Promise<void> {
     authorEmail:
       process.env.DRAFT_PR_GIT_AUTHOR_EMAIL?.trim() ||
       "engineering-agent-workflows@users.noreply.github.com",
+    ...(process.env.DRAFT_PR_GIT_CURL_RESOLVE
+      ? { gitCurlResolve: process.env.DRAFT_PR_GIT_CURL_RESOLVE }
+      : {}),
   });
   const dependencies = {
     provider,
     workspace,
     policy,
-    allowedRepository:
-      process.env.DRAFT_PR_ALLOWED_REPOSITORY?.trim() ||
-      process.env.GITHUB_ALLOWED_REPOSITORY?.trim() ||
-      "",
+    allowedRepository,
     serverUrl: process.env.GITHUB_SERVER_URL?.trim() || "https://github.com",
     apply,
     ...(process.env.GITHUB_BOT_LOGIN
       ? { botLogin: process.env.GITHUB_BOT_LOGIN }
-      : {}),
-    monkeyScanBotLogin: process.env.MONKEYSCAN_BOT_LOGIN?.trim() ?? "",
-    ...(isPositiveInteger(process.env.MONKEYSCAN_BOT_USER_ID)
-      ? { monkeyScanBotUserId: Number(process.env.MONKEYSCAN_BOT_USER_ID) }
       : {}),
   };
 
@@ -127,58 +121,56 @@ async function main(): Promise<void> {
               options.message ?? "Draft PR Agent execution failed",
               dependencies,
             )
-          : options.command === "list-review-targets"
-            ? await listReviewFixTargets(options.repository, dependencies)
-            : options.command === "prepare-review"
-              ? await prepareReviewFix(
+          : options.command === "prepare-review"
+            ? await prepareReviewFix(
+                options.repository,
+                options.pullRequestNumber!,
+                options.reviewId!,
+                dependencies,
+              )
+            : options.command === "apply-review"
+              ? await applyReviewFix(
                   options.repository,
                   options.pullRequestNumber!,
+                  JSON.parse(
+                    await readFile(options.analysisFile!, "utf8"),
+                  ) as unknown,
                   dependencies,
                 )
-              : options.command === "apply-review"
-                ? await applyReviewFix(
+              : options.command === "fail-review"
+                ? await failReviewFix(
                     options.repository,
                     options.pullRequestNumber!,
-                    JSON.parse(
-                      await readFile(options.analysisFile!, "utf8"),
-                    ) as unknown,
+                    options.reviewCursor ?? 0,
+                    options.iterations ?? 0,
+                    options.headSha ?? "",
                     dependencies,
                   )
-                : options.command === "fail-review"
-                  ? await failReviewFix(
+                : options.command === "prepare-ci"
+                  ? await prepareCiFix(
                       options.repository,
                       options.pullRequestNumber!,
-                      options.conversationCursor ?? 0,
-                      options.reviewCursor ?? 0,
-                      options.iterations ?? 0,
                       options.headSha ?? "",
+                      options.checkSuiteId ?? 0,
                       dependencies,
                     )
-                  : options.command === "prepare-ci"
-                    ? await prepareCiFix(
+                  : options.command === "apply-ci"
+                    ? await applyCiFix(
                         options.repository,
                         options.pullRequestNumber!,
-                        options.headSha ?? "",
-                        options.checkSuiteId ?? 0,
+                        JSON.parse(
+                          await readFile(options.analysisFile!, "utf8"),
+                        ) as unknown,
                         dependencies,
                       )
-                    : options.command === "apply-ci"
-                      ? await applyCiFix(
-                          options.repository,
-                          options.pullRequestNumber!,
-                          JSON.parse(
-                            await readFile(options.analysisFile!, "utf8"),
-                          ) as unknown,
-                          dependencies,
-                        )
-                      : await failCiFix(
-                          options.repository,
-                          options.pullRequestNumber!,
-                          options.checkSuiteId ?? 0,
-                          options.attempts ?? 0,
-                          options.headSha ?? "",
-                          dependencies,
-                        );
+                    : await failCiFix(
+                        options.repository,
+                        options.pullRequestNumber!,
+                        options.checkSuiteId ?? 0,
+                        options.attempts ?? 0,
+                        options.headSha ?? "",
+                        dependencies,
+                      );
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
@@ -199,7 +191,6 @@ function parseArguments(args: string[]): CLIOptions {
     command !== "prepare" &&
     command !== "apply" &&
     command !== "fail" &&
-    command !== "list-review-targets" &&
     command !== "prepare-review" &&
     command !== "apply-review" &&
     command !== "fail-review" &&
@@ -215,7 +206,7 @@ function parseArguments(args: string[]): CLIOptions {
   let trigger = "";
   let analysisFile = "";
   let message = "";
-  let conversationCursor = 0;
+  let reviewId = 0;
   let reviewCursor = 0;
   let iterations = 0;
   let headSha = "";
@@ -237,10 +228,8 @@ function parseArguments(args: string[]): CLIOptions {
       analysisFile = requiredArgumentValue(args, ++index, argument);
     } else if (argument === "--message") {
       message = requiredArgumentValue(args, ++index, argument);
-    } else if (argument === "--conversation-cursor") {
-      conversationCursor = Number(
-        requiredArgumentValue(args, ++index, argument),
-      );
+    } else if (argument === "--review") {
+      reviewId = Number(requiredArgumentValue(args, ++index, argument));
     } else if (argument === "--review-cursor") {
       reviewCursor = Number(requiredArgumentValue(args, ++index, argument));
     } else if (argument === "--iterations") {
@@ -281,6 +270,12 @@ function parseArguments(args: string[]): CLIOptions {
     throw new Error("prepare requires --trigger ready or approved");
   }
   if (
+    command === "prepare-review" &&
+    (!Number.isSafeInteger(reviewId) || reviewId <= 0)
+  ) {
+    throw new Error("prepare-review requires --review");
+  }
+  if (
     (command === "apply" ||
       command === "apply-review" ||
       command === "apply-ci") &&
@@ -296,7 +291,7 @@ function parseArguments(args: string[]): CLIOptions {
     ...(trigger === "ready" || trigger === "approved" ? { trigger } : {}),
     ...(analysisFile ? { analysisFile } : {}),
     ...(message ? { message } : {}),
-    ...(conversationCursor ? { conversationCursor } : {}),
+    ...(reviewId ? { reviewId } : {}),
     ...(reviewCursor ? { reviewCursor } : {}),
     ...(iterations ? { iterations } : {}),
     ...(headSha ? { headSha } : {}),

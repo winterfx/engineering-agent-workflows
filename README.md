@@ -64,29 +64,32 @@ Dry-run mode still clones the repository and lets the Agent produce and validate
 a temporary local diff. It does not change labels, comments, branches, or Pull
 Requests, and cleans the per-Issue workspace after evaluation.
 
-### MonkeyScan review fixes
+### Requested-change review fixes
 
-The same Draft PR Agent processes ordinary Conversation comments and inline
-Review Comments posted by the configured MonkeyScan bot on an open
-Agent-managed Draft PR. It does not reuse the Issue implementation sandbox.
-Each attempt uses a new Agent sandbox and a fresh shallow clone of the current
-`codex/issue-*` branch.
+The same Draft PR Agent processes a submitted `changes_requested` Review from a
+repository `OWNER`, `MEMBER`, or `COLLABORATOR` on an open Agent-managed Draft
+PR. The `pull_request_review` webhook is the only review-fix trigger. Ordinary
+PR Conversation comments, standalone inline Review Comment webhooks, and
+`approved` or `commented` Reviews do not start the Agent. Each attempt uses a
+new Agent sandbox and a fresh shallow clone of the current `codex/issue-*`
+branch instead of reusing the Issue implementation sandbox.
 
-All unprocessed MonkeyScan comments visible on one PR are sorted by comment ID
-and handled as one batch, producing at most one commit and one non-force push.
-Inline findings include their file path, line location, diff hunk, and referenced
-commit metadata. The deterministic tool verifies the bot login and optional
-numeric user ID, the allowlisted head repository, Draft/open state, managed
-branch prefix, comment fingerprint, and current head SHA. A per-PR lock prevents
-concurrent pushes.
+The Review body and all non-reply inline comments belonging to that exact
+Review ID and reviewer are handled as one batch, producing at most one commit
+and one non-force push. Inline findings include their file path, line location,
+diff hunk, and referenced commit metadata. The deterministic tool refetches the
+Review, verifies its trusted repository association, the allowlisted head
+repository, Draft/open state, managed branch prefix, finding fingerprint, and
+current head SHA. A per-PR lock prevents concurrent pushes. Reviews above the
+configured finding limit pause for maintainer handling instead of being
+partially processed.
 
-A managed PR comment stores separate Conversation and Review Comment cursors,
-the current head SHA, and fix iteration count. Existing v1 Conversation cursors
-remain readable. A one-minute Scheduler reconciliation finds comments whose
-webhook overlapped another run. Automatic fixes stop after three batches or when
-the diff crosses the existing approval gates. MonkeyScan comments are untrusted
-findings: the Agent must verify each one against code and cannot edit, reply to,
-or resolve scanner review threads.
+A managed PR comment stores the processed Review ID cursor, current head SHA,
+and fix iteration count. Legacy v1/v2 state remains readable, but old comment
+IDs are not reused as Review IDs. Automatic fixes stop after three batches or
+when the diff crosses the existing approval gates. Review content is untrusted:
+the Agent must verify every finding against code and cannot edit, reply to, or
+resolve Review threads. There is no recurring reconciliation timer.
 
 ### CI failure fixes
 
@@ -118,7 +121,7 @@ sequenceDiagram
     participant Draft as Draft PR Agent
     participant Boundary as Trusted Git / Provider Boundary
     participant CI as GitHub Checks / CI
-    participant Scan as MonkeyScan
+    actor Reviewer as Repository reviewer
 
     Human->>GitHub: Open Issue #439
     GitHub->>Triage: issues.opened
@@ -134,10 +137,10 @@ sequenceDiagram
     Boundary->>Draft: One fix_ci run with verified failed checks
     Draft-->>Boundary: One coherent uncommitted CI fix + per-check results
     Boundary->>GitHub: Revalidate suite and head,<br/>create one commit, push same PR branch
-    Scan->>GitHub: Submit multiple inline Review Comments
-    GitHub->>Boundary: review/review_comment webhooks
-    Boundary->>Draft: One fix_review run with all pending findings
-    Draft-->>Boundary: One coherent uncommitted fix + per-comment results
+    Reviewer->>GitHub: Submit Changes requested with body + inline comments
+    GitHub->>Boundary: pull_request_review.submitted webhook
+    Boundary->>Draft: One fix_review run for the exact Review
+    Draft-->>Boundary: One coherent uncommitted fix + per-finding results
     Boundary->>GitHub: Validate, create one commit, push same PR branch
     Note over Human,GitHub: Required human gate: review the Draft PR,<br/>resolve/accept threads, mark ready, and merge
 ```
@@ -164,18 +167,17 @@ Concretely:
    and annotations. One `fix_ci` run may produce at most one validated commit
    and push, which triggers CI again on the new head. Stale-head and successful
    suite events are ignored.
-6. **Automatic MonkeyScan batch:** MonkeyScan may publish several Conversation
-   or inline Review Comments. The workflow collects pending MonkeyScan findings
-   up to the configured batch limit (currently 50), sorts them deterministically,
-   and gives them to one `fix_review` run. A valid result produces at most one
-   commit and one push to the existing PR branch. Overflow or a comment that
-   arrives after the batch snapshot is picked up by its webhook or the
-   one-minute reconciliation pass.
+6. **Automatic requested-change batch:** a trusted repository Reviewer may
+   submit one `changes_requested` Review containing an overall body and several
+   inline comments. The Review webhook starts one `fix_review` run for that
+   exact Review ID. A valid result produces at most one commit and one push to
+   the existing PR branch. Ordinary PR Conversation comments, standalone inline
+   comment events, approvals, and comment-only Reviews are ignored.
 7. **Conditional human intervention:** automatic CI and review fixes stop after
    three batches, on conflicting findings, on approval-gated risk, or when
    validation cannot establish a safe fix. A maintainer then decides whether to
    edit the PR, request another change, or accept the remaining finding. The
-   Agent does not resolve MonkeyScan threads.
+   Agent does not resolve Review threads.
 8. **Human finishes the PR:** a maintainer reviews the final diff and checks,
    resolves or accepts the review conversations, marks the Draft PR ready, and
    merges it under the repository's normal protection rules. These final PR
@@ -184,7 +186,7 @@ Concretely:
 Human intervention points are therefore: optional correction or `skip-triage`
 during triage; required `agent:ready` before implementation; conditional
 `agent:approved` for gated Issue implementation; conditional manual handling of
-stopped CI or MonkeyScan fixes; and required final PR review, readiness, and
+stopped CI or requested-change fixes; and required final PR review, readiness, and
 merge.
 
 ## Label ownership
@@ -259,11 +261,9 @@ For the Draft PR workflow, it additionally needs:
 A classic GitLab access token needs `api` scope. For GitLab, enable **Issues
 events** and **Comments** and map them to `webhook.gitlab.issue` and
 `webhook.gitlab.note`. For GitHub, enable **Issues**, **Issue comments**, **Pull
-request reviews**, **Pull request review comments**, and **Check suites**. Map them to
+request reviews**, and **Check suites**. Map them to
 `webhook.github.issues`, `webhook.github.issue_comment`,
-`webhook.github.pull_request_review`, and
-`webhook.github.pull_request_review_comment`, and
-`webhook.github.check_suite`. Pull Request payloads delivered on the Issues
+`webhook.github.pull_request_review`, and `webhook.github.check_suite`. Pull Request payloads delivered on the Issues
 topic are ignored.
 
 GitHub signs webhook deliveries but cannot add the fixed source token required
@@ -296,8 +296,6 @@ API token.
 | `DRAFT_PR_ALLOWED_REPOSITORY` | Yes                              | Exact Draft PR repository allowlist                                |
 | `DRAFT_PR_GIT_AUTHOR_NAME`    | Apply mode                       | Deterministic commit author name                                   |
 | `DRAFT_PR_GIT_AUTHOR_EMAIL`   | Apply mode                       | Deterministic commit author email                                  |
-| `MONKEYSCAN_BOT_LOGIN`        | MonkeyScan review fixes          | Exact GitHub login allowed to trigger review fixes                 |
-| `MONKEYSCAN_BOT_USER_ID`      | No                               | Optional numeric GitHub user ID for stronger identity matching     |
 | `GITHUB_WEBHOOK_SECRET`       | GitHub webhook relay             | GitHub HMAC secret; trusted host only                              |
 | `AGENT_COMPOSE_WEBHOOK_TOKEN` | GitHub webhook relay             | Fixed token configured on the internal daemon source               |
 

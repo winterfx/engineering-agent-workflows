@@ -48,6 +48,17 @@ export interface GitHubPullRequestReviewCommentAPI {
   pull_request_review_id?: number;
 }
 
+export interface GitHubPullRequestReviewAPI {
+  id: number;
+  body: string | null;
+  state: string;
+  commit_id: string;
+  author_association: string;
+  user?: GitHubUserAPI;
+  html_url?: string;
+  submitted_at?: string;
+}
+
 export interface GitHubRepositoryAPI {
   default_branch: string;
 }

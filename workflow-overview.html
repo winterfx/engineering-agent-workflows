@@ -1446,8 +1446,8 @@
                 <div class="trigger-list">
                   <span class="trigger">label: agent:ready</span>
                   <span class="trigger">label: agent:approved</span>
-                  <span class="trigger">MonkeyScan finding</span>
-                  <span class="trigger">reconcile / 1 min</span>
+                  <span class="trigger">Review: changes requested</span>
+                  <span class="trigger">CI gate failed</span>
                 </div>
                 <div class="lane-flow">
                   <div class="lane-step">
@@ -1597,10 +1597,10 @@
                 </div>
               </div>
               <div class="review-loop">
-                <strong>MonkeyScan review loop</strong>
-                Draft PR 上的新 finding 会让同一个 Draft PR Agent 在全新 sandbox
-                中验证并修复；每个 PR 最多自动处理 3 个批次，同一批最多产生 1 个
-                commit。
+                <strong>Review / CI fix loop</strong>
+                可信 Reviewer 提交 changes requested，或 CI gate 失败时，同一个
+                Draft PR Agent 会在全新 sandbox 中验证并修复；每批最多 1 个
+                commit，没有定时 reconciliation。
               </div>
             </article>
           </div>
@@ -1716,28 +1716,45 @@
 
               <div class="timeline-row">
                 <span class="timeline-num">05</span>
-                <span class="timeline-actor">MonkeyScan</span>
+                <span class="timeline-actor">CI gate</span>
                 <div class="timeline-content">
-                  <h3>扫描 Draft PR 并留下 finding</h3>
+                  <h3>失败的 check suite 触发修复</h3>
                   <p>
-                    MonkeyScan 在 PR conversation、review 或 inline comment
-                    中报告一个可验证的问题，例如错误路径仍可能重复返回事件。
+                    <code>check_suite.completed</code>
+                    报告失败后，可信外层按当前 head 验证失败 checks；Agent
+                    在一个批次中诊断并提交至多一个修复 commit。成功或 stale-head
+                    事件会被忽略。
                   </p>
                   <div class="timeline-result">
-                    <span class="result-chip">review comment · created</span>
+                    <span class="result-chip">fix_ci · failed suite</span>
                   </div>
                 </div>
               </div>
 
               <div class="timeline-row">
                 <span class="timeline-num">06</span>
+                <span class="timeline-actor">可信 Reviewer</span>
+                <div class="timeline-content">
+                  <h3>提交 Changes requested Review</h3>
+                  <p>
+                    Reviewer 在一个正式 Review 中写总体意见和一条或多条 inline
+                    comment，例如指出错误路径仍可能重复返回事件。
+                  </p>
+                  <div class="timeline-result">
+                    <span class="result-chip">review · changes_requested</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="timeline-row">
+                <span class="timeline-num">07</span>
                 <span class="timeline-actor">Draft PR</span>
                 <div class="timeline-content">
                   <h3>在全新 sandbox 中验证并修复</h3>
                   <p>
-                    Agent 从 PR 当前 head 重新 clone，验证 finding
-                    后修改代码和测试；同一批 finding 合并为一个
-                    commit，并非盲目接受扫描结论。
+                    Agent 从 PR 当前 head 重新 clone，把 Review body 和属于同一
+                    Review ID 的 inline comments 作为一个批次验证；普通 PR
+                    comment 和单条 inline webhook 都不会启动 Agent。
                   </p>
                   <div class="timeline-result">
                     <span class="result-chip">1 fix batch</span
@@ -1748,12 +1765,12 @@
               </div>
 
               <div class="timeline-row human">
-                <span class="timeline-num">07</span>
+                <span class="timeline-num">08</span>
                 <span class="timeline-actor">维护者 · 必须</span>
                 <div class="timeline-content">
                   <h3>最终评审并决定是否合并</h3>
                   <p>
-                    维护者检查完整 diff、测试和 MonkeyScan 修复结果，再决定标记
+                    维护者检查完整 diff、测试和 Review / CI 修复结果，再决定标记
                     ready 或 merge。Workflow 永远不会替维护者完成这一步。
                   </p>
                   <div class="timeline-result">

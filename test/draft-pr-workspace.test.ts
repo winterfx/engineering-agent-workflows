@@ -4,7 +4,10 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { GitDraftPrWorkspace } from "../src/draft-pr/workspace.js";
+import {
+  GitDraftPrWorkspace,
+  gitCurlResolveEnvironment,
+} from "../src/draft-pr/workspace.js";
 
 const temporaryRoots: string[] = [];
 
@@ -17,6 +20,17 @@ afterEach(async () => {
 });
 
 describe("Git Draft PR workspace", () => {
+  it("scopes a configured GitHub resolve override to Git curl", () => {
+    expect(gitCurlResolveEnvironment("github.com:443:172.18.0.1")).toEqual({
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "http.curloptResolve",
+      GIT_CONFIG_VALUE_0: "github.com:443:172.18.0.1",
+    });
+    expect(() =>
+      gitCurlResolveEnvironment("example.com:443:172.18.0.1"),
+    ).toThrow("must use github.com:443:<IPv4>");
+  });
+
   it("inspects staged and untracked changes without moving HEAD", async () => {
     const { workspace, workspacePath, head } = await localWorkspace();
     await writeFile(path.join(workspacePath, "tracked.txt"), "changed\n");

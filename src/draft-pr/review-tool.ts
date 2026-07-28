@@ -11,9 +11,10 @@ import {
 } from "./review-comment.js";
 import { requiresApproval } from "./policy.js";
 import type {
-  DraftPrProvider,
   DraftPullRequest,
+  PullRequestReview,
   PullRequestReviewComment,
+  ReviewFixProvider,
 } from "./provider.js";
 import {
   assertAllowedRepository,
@@ -22,7 +23,7 @@ import {
 } from "./repository.js";
 import {
   reviewFixSubmissionSchema,
-  type ReviewCommentSource,
+  type ReviewFindingSource,
   type ReviewFixAnalysis,
   type ReviewFixSubmission,
 } from "./review-schema.js";
@@ -31,13 +32,11 @@ import type { DraftPrToolDependencies } from "./tool.js";
 import { DraftPrWorkspaceLockError } from "./workspace.js";
 
 export interface ReviewFixDependencies extends DraftPrToolDependencies {
-  provider: DraftPrProvider;
-  monkeyScanBotLogin: string;
-  monkeyScanBotUserId?: number;
+  provider: ReviewFixProvider;
 }
 
 export interface ReviewFinding {
-  source: ReviewCommentSource;
+  source: ReviewFindingSource;
   commentId: number;
   body: string;
   htmlUrl?: string;
@@ -56,9 +55,14 @@ export interface ReviewFinding {
   pullRequestReviewId?: number;
 }
 
-interface SourcedComment {
-  source: ReviewCommentSource;
-  comment: IssueComment | PullRequestReviewComment;
+interface SourcedFinding {
+  source: ReviewFindingSource;
+  id: number;
+  body: string;
+  htmlUrl?: string;
+  createdAt?: string;
+  review?: PullRequestReview;
+  comment?: PullRequestReviewComment;
 }
 
 export interface PreparedReviewFix {
@@ -71,8 +75,8 @@ export interface PreparedReviewFix {
   branch?: string;
   baseBranch?: string;
   expectedHeadSha?: string;
-  commentsFingerprint?: string;
-  previousConversationCursor?: number;
+  reviewId?: number;
+  reviewFingerprint?: string;
   previousReviewCursor?: number;
   previousIterations?: number;
   findings?: ReviewFinding[];
@@ -90,82 +94,48 @@ export interface AppliedReviewFix {
   inspection?: DraftPrInspection;
 }
 
-export async function listReviewFixTargets(
-  repository: string,
-  dependencies: ReviewFixDependencies,
-): Promise<{
-  ok: true;
-  repository: string;
-  targets: Array<{ pullRequestNumber: number; headSha: string }>;
-}> {
-  assertAllowedRepository(repository, dependencies.allowedRepository);
-  requireReviewIdentities(dependencies);
-  const pullRequests =
-    await dependencies.provider.listOpenPullRequests(repository);
-  const targets: Array<{ pullRequestNumber: number; headSha: string }> = [];
-  for (const pullRequest of pullRequests) {
-    if (!eligiblePullRequest(pullRequest, repository, dependencies)) continue;
-    const [conversationComments, reviewComments] = await Promise.all([
-      dependencies.provider.listComments(repository, pullRequest.number),
-      dependencies.provider.listReviewComments(repository, pullRequest.number),
-    ]);
-    const state = reviewState(conversationComments, dependencies);
-    if (
-      state.iterations < dependencies.policy.maxFixIterations &&
-      pendingMonkeyScanComments(
-        conversationComments,
-        reviewComments,
-        state,
-        dependencies,
-      ).length
-    ) {
-      targets.push({
-        pullRequestNumber: pullRequest.number,
-        headSha: pullRequest.headSha!,
-      });
-    }
-  }
-  return { ok: true, repository, targets };
-}
-
 export async function prepareReviewFix(
   repository: string,
   pullRequestNumber: number,
+  reviewId: number,
   dependencies: ReviewFixDependencies,
 ): Promise<PreparedReviewFix> {
   assertAllowedRepository(repository, dependencies.allowedRepository);
-  requireReviewIdentities(dependencies);
-  const [pullRequest, conversationComments, reviewComments] = await Promise.all(
-    [
+  requireReviewBotIdentity(dependencies);
+  const [pullRequest, review, conversationComments, reviewComments] =
+    await Promise.all([
       dependencies.provider.getPullRequest(repository, pullRequestNumber),
+      dependencies.provider.getPullRequestReview(
+        repository,
+        pullRequestNumber,
+        reviewId,
+      ),
       dependencies.provider.listComments(repository, pullRequestNumber),
       dependencies.provider.listReviewComments(repository, pullRequestNumber),
-    ],
-  );
+    ]);
   const reason = ineligibleReason(pullRequest, repository, dependencies);
   if (reason) return skipped(repository, pullRequestNumber, reason);
+  const reviewReason = ineligibleReviewReason(review, pullRequest);
+  if (reviewReason) return skipped(repository, pullRequestNumber, reviewReason);
 
   const state = reviewState(conversationComments, dependencies);
-  const pending = pendingMonkeyScanComments(
-    conversationComments,
-    reviewComments,
-    state,
-    dependencies,
-  ).slice(0, dependencies.policy.maxReviewComments);
-  if (pending.length === 0) {
+  if (review.id <= state.reviewCursor) {
     return skipped(
       repository,
       pullRequestNumber,
-      "no unprocessed MonkeyScan comments",
+      "Pull Request Review was already processed",
     );
   }
-  if (state.iterations >= dependencies.policy.maxFixIterations) {
+  const findings = findingsForReview(review, reviewComments);
+  if (findings.length === 0) {
+    return skipped(repository, pullRequestNumber, "Review has no findings");
+  }
+  if (findings.length > dependencies.policy.maxReviewComments) {
     if (dependencies.apply) {
       await upsertReviewState(
         repository,
         pullRequestNumber,
         {
-          conversationCursor: state.conversationCursor,
           reviewCursor: state.reviewCursor,
           iterations: state.iterations,
           headSha: pullRequest.headSha!,
@@ -178,7 +148,28 @@ export async function prepareReviewFix(
     return skipped(
       repository,
       pullRequestNumber,
-      "automatic MonkeyScan fix iteration limit reached",
+      `Review has ${findings.length} findings, exceeding the automatic limit of ${dependencies.policy.maxReviewComments}`,
+    );
+  }
+  if (state.iterations >= dependencies.policy.maxFixIterations) {
+    if (dependencies.apply) {
+      await upsertReviewState(
+        repository,
+        pullRequestNumber,
+        {
+          reviewCursor: state.reviewCursor,
+          iterations: state.iterations,
+          headSha: pullRequest.headSha!,
+          status: "needs-approval",
+        },
+        conversationComments,
+        dependencies,
+      );
+    }
+    return skipped(
+      repository,
+      pullRequestNumber,
+      "automatic Review fix iteration limit reached",
     );
   }
 
@@ -208,7 +199,6 @@ export async function prepareReviewFix(
       repository,
       pullRequestNumber,
       {
-        conversationCursor: state.conversationCursor,
         reviewCursor: state.reviewCursor,
         iterations: state.iterations,
         headSha: pullRequest.headSha!,
@@ -226,11 +216,11 @@ export async function prepareReviewFix(
     branch: prepared.branch,
     baseBranch: prepared.baseBranch,
     expectedHeadSha: prepared.baseCommit,
-    commentsFingerprint: fingerprintComments(pending),
-    previousConversationCursor: state.conversationCursor,
+    reviewId: review.id,
+    reviewFingerprint: fingerprintFindings(findings),
     previousReviewCursor: state.reviewCursor,
     previousIterations: state.iterations,
-    findings: pending.map((value) => toFinding(value)),
+    findings: findings.map((value) => toFinding(value)),
   };
 }
 
@@ -241,34 +231,37 @@ export async function applyReviewFix(
   dependencies: ReviewFixDependencies,
 ): Promise<AppliedReviewFix> {
   assertAllowedRepository(repository, dependencies.allowedRepository);
-  requireReviewIdentities(dependencies);
+  requireReviewBotIdentity(dependencies);
   const submission = reviewFixSubmissionSchema.parse(submissionInput);
-  const [pullRequest, conversationComments, reviewComments] = await Promise.all(
-    [
+  const [pullRequest, review, conversationComments, reviewComments] =
+    await Promise.all([
       dependencies.provider.getPullRequest(repository, pullRequestNumber),
+      dependencies.provider.getPullRequestReview(
+        repository,
+        pullRequestNumber,
+        submission.reviewId,
+      ),
       dependencies.provider.listComments(repository, pullRequestNumber),
       dependencies.provider.listReviewComments(repository, pullRequestNumber),
-    ],
-  );
+    ]);
   const reason = ineligibleReason(pullRequest, repository, dependencies);
   if (reason) throw new Error(reason);
+  const reviewReason = ineligibleReviewReason(review, pullRequest);
+  if (reviewReason) throw new Error(reviewReason);
   if (pullRequest.headSha !== submission.expectedHeadSha) {
     throw new Error("Pull Request head changed after review fix preparation");
   }
-  const expectedKeys = submission.commentRefs.map(commentKey);
-  const preparedComments = allMonkeyScanComments(
-    conversationComments,
-    reviewComments,
-    dependencies,
-  )
-    .filter((value) => expectedKeys.includes(commentKey(value)))
-    .sort(compareSourcedComments);
+  const expectedKeys = submission.findingRefs.map(findingKey);
+  const preparedFindings = findingsForReview(review, reviewComments);
   if (
     new Set(expectedKeys).size !== expectedKeys.length ||
-    preparedComments.length !== submission.commentRefs.length ||
-    fingerprintComments(preparedComments) !== submission.commentsFingerprint
+    preparedFindings.length !== submission.findingRefs.length ||
+    preparedFindings.some(
+      (value) => !expectedKeys.includes(findingKey(value)),
+    ) ||
+    fingerprintFindings(preparedFindings) !== submission.reviewFingerprint
   ) {
-    throw new Error("MonkeyScan comments changed after review fix preparation");
+    throw new Error("Pull Request Review changed after fix preparation");
   }
 
   const inspection = await dependencies.workspace.inspect(
@@ -279,17 +272,11 @@ export async function applyReviewFix(
       "the Agent committed or moved HEAD in the review workspace",
     );
   }
-  validateFindingCoverage(submission.analysis, submission.commentRefs);
+  validateFindingCoverage(submission.analysis, submission.findingRefs);
   const nextIterations = submission.previousIterations + 1;
-  const nextConversationCursor = nextCursor(
-    "conversation",
-    submission.previousConversationCursor,
-    submission.commentRefs,
-  );
-  const nextReviewCursor = nextCursor(
-    "review",
+  const nextReviewCursor = Math.max(
     submission.previousReviewCursor,
-    submission.commentRefs,
+    submission.reviewId,
   );
 
   if (submission.analysis.outcome !== "fixed") {
@@ -308,7 +295,6 @@ export async function applyReviewFix(
     await finishWithoutPush(
       repository,
       pullRequestNumber,
-      nextConversationCursor,
       nextReviewCursor,
       nextIterations,
       submission.expectedHeadSha,
@@ -337,7 +323,6 @@ export async function applyReviewFix(
     await finishWithoutPush(
       repository,
       pullRequestNumber,
-      nextConversationCursor,
       nextReviewCursor,
       nextIterations,
       submission.expectedHeadSha,
@@ -377,7 +362,6 @@ export async function applyReviewFix(
     repository,
     pullRequestNumber,
     {
-      conversationCursor: nextConversationCursor,
       reviewCursor: nextReviewCursor,
       iterations: nextIterations,
       headSha: commit,
@@ -401,7 +385,6 @@ export async function applyReviewFix(
 export async function failReviewFix(
   repository: string,
   pullRequestNumber: number,
-  conversationCursor: number,
   reviewCursor: number,
   iterations: number,
   headSha: string,
@@ -418,7 +401,6 @@ export async function failReviewFix(
         repository,
         pullRequestNumber,
         {
-          conversationCursor,
           reviewCursor,
           iterations,
           headSha,
@@ -440,66 +422,39 @@ export async function failReviewFix(
   };
 }
 
-function pendingMonkeyScanComments(
-  conversationComments: IssueComment[],
+function findingsForReview(
+  review: PullRequestReview,
   reviewComments: PullRequestReviewComment[],
-  state: Pick<ReviewFixState, "conversationCursor" | "reviewCursor">,
-  dependencies: ReviewFixDependencies,
-): SourcedComment[] {
-  return allMonkeyScanComments(
-    conversationComments,
-    reviewComments,
-    dependencies,
-  )
-    .filter((value) =>
-      value.source === "conversation"
-        ? value.comment.id > state.conversationCursor
-        : value.comment.id > state.reviewCursor,
-    )
-    .sort(compareSourcedComments);
-}
-
-function allMonkeyScanComments(
-  conversationComments: IssueComment[],
-  reviewComments: PullRequestReviewComment[],
-  dependencies: ReviewFixDependencies,
-): SourcedComment[] {
-  return [
-    ...conversationComments.map((comment) => ({
-      source: "conversation" as const,
-      comment,
-    })),
-    ...reviewComments.map((comment) => ({
-      source: "review" as const,
-      comment,
-    })),
-  ].filter((value) => isMonkeyScanComment(value.comment, dependencies));
-}
-
-function isMonkeyScanComment(
-  comment: IssueComment | PullRequestReviewComment,
-  dependencies: ReviewFixDependencies,
-): boolean {
-  const user = comment.user;
-  if (
-    !user ||
-    user.login.trim().toLowerCase() !==
-      dependencies.monkeyScanBotLogin.trim().toLowerCase()
-  ) {
-    return false;
+): SourcedFinding[] {
+  const findings: SourcedFinding[] = [];
+  if (review.body.trim()) {
+    findings.push({
+      source: "review",
+      id: review.id,
+      body: review.body,
+      ...(review.htmlUrl ? { htmlUrl: review.htmlUrl } : {}),
+      ...(review.submittedAt ? { createdAt: review.submittedAt } : {}),
+      review,
+    });
   }
-  return (
-    dependencies.monkeyScanBotUserId === undefined ||
-    user.id === dependencies.monkeyScanBotUserId
+  findings.push(
+    ...reviewComments
+      .filter(
+        (comment) =>
+          comment.pullRequestReviewId === review.id &&
+          !comment.inReplyToId &&
+          sameUser(comment.user, review.user),
+      )
+      .map((comment) => ({
+        source: "review_comment" as const,
+        id: comment.id,
+        body: comment.body,
+        ...(comment.htmlUrl ? { htmlUrl: comment.htmlUrl } : {}),
+        ...(comment.createdAt ? { createdAt: comment.createdAt } : {}),
+        comment,
+      })),
   );
-}
-
-function eligiblePullRequest(
-  pullRequest: DraftPullRequest,
-  repository: string,
-  dependencies: ReviewFixDependencies,
-): boolean {
-  return !ineligibleReason(pullRequest, repository, dependencies);
+  return findings.sort(compareSourcedFindings);
 }
 
 function ineligibleReason(
@@ -525,20 +480,51 @@ function ineligibleReason(
   return undefined;
 }
 
+function ineligibleReviewReason(
+  review: PullRequestReview,
+  pullRequest: DraftPullRequest,
+): string | undefined {
+  if (review.state.trim().toLowerCase() !== "changes_requested") {
+    return "Pull Request Review is not a change request";
+  }
+  if (!review.user?.login.trim()) return "Pull Request Review has no author";
+  if (!trustedReviewerAssociation(review.authorAssociation)) {
+    return "Pull Request Review author is not a trusted repository member";
+  }
+  if (review.commitId !== pullRequest.headSha) {
+    return "Pull Request Review targets a stale head";
+  }
+  return undefined;
+}
+
+function trustedReviewerAssociation(value: string): boolean {
+  return ["owner", "member", "collaborator"].includes(
+    value.trim().toLowerCase(),
+  );
+}
+
+function sameUser(
+  left: PullRequestReviewComment["user"],
+  right: PullRequestReview["user"],
+): boolean {
+  if (!left || !right) return false;
+  if (left.id !== undefined && right.id !== undefined)
+    return left.id === right.id;
+  return left.login.trim().toLowerCase() === right.login.trim().toLowerCase();
+}
+
 function validateFindingCoverage(
   analysis: ReviewFixAnalysis,
-  expectedComments: ReviewFixSubmission["commentRefs"],
+  expectedFindings: ReviewFixSubmission["findingRefs"],
 ): void {
-  const actual = analysis.findings.map(commentKey);
-  const expected = expectedComments.map(commentKey);
+  const actual = analysis.findings.map(findingKey);
+  const expected = expectedFindings.map(findingKey);
   if (
     new Set(actual).size !== actual.length ||
     actual.length !== expected.length ||
     expected.some((key) => !actual.includes(key))
   ) {
-    throw new Error(
-      "review result must address every prepared MonkeyScan comment once",
-    );
+    throw new Error("review result must address every prepared finding once");
   }
   if (
     analysis.outcome === "fixed" &&
@@ -588,7 +574,6 @@ function validateFixedReview(
 async function finishWithoutPush(
   repository: string,
   pullRequestNumber: number,
-  conversationCursor: number,
   reviewCursor: number,
   iterations: number,
   headSha: string,
@@ -600,7 +585,7 @@ async function finishWithoutPush(
     await upsertReviewState(
       repository,
       pullRequestNumber,
-      { conversationCursor, reviewCursor, iterations, headSha, status },
+      { reviewCursor, iterations, headSha, status },
       comments,
       dependencies,
     );
@@ -645,25 +630,31 @@ function reviewState(
   return parseReviewFixState(findReviewFixComment(comments, botLogin));
 }
 
-function fingerprintComments(comments: SourcedComment[]): string {
+function fingerprintFindings(findings: SourcedFinding[]): string {
   return crypto
     .createHash("sha256")
     .update(
       JSON.stringify(
-        comments.map(({ source, comment }) => ({
+        findings.map(({ source, id, body, review, comment }) => ({
           source,
-          id: comment.id,
-          body: comment.body,
-          author: comment.user?.login ?? "",
-          authorId: comment.user?.id ?? null,
-          ...(source === "review"
+          id,
+          body,
+          author: (review?.user ?? comment?.user)?.login ?? "",
+          authorId: (review?.user ?? comment?.user)?.id ?? null,
+          ...(review
             ? {
-                path: (comment as PullRequestReviewComment).path,
-                line: (comment as PullRequestReviewComment).line ?? null,
-                originalLine:
-                  (comment as PullRequestReviewComment).originalLine ?? null,
-                diffHunk: (comment as PullRequestReviewComment).diffHunk ?? "",
-                commitId: (comment as PullRequestReviewComment).commitId ?? "",
+                state: review.state,
+                commitId: review.commitId,
+                authorAssociation: review.authorAssociation,
+              }
+            : {}),
+          ...(comment
+            ? {
+                path: comment.path,
+                line: comment.line ?? null,
+                originalLine: comment.originalLine ?? null,
+                diffHunk: comment.diffHunk ?? "",
+                commitId: comment.commitId ?? "",
               }
             : {}),
         })),
@@ -673,72 +664,64 @@ function fingerprintComments(comments: SourcedComment[]): string {
     .slice(0, 20);
 }
 
-function toFinding({ source, comment }: SourcedComment): ReviewFinding {
-  const reviewComment =
-    source === "review" ? (comment as PullRequestReviewComment) : undefined;
+function toFinding({
+  source,
+  id,
+  body,
+  htmlUrl,
+  createdAt,
+  comment,
+}: SourcedFinding): ReviewFinding {
   return {
     source,
-    commentId: comment.id,
-    body: truncateText(comment.body, 4000),
-    ...(comment.htmlUrl ? { htmlUrl: comment.htmlUrl } : {}),
-    ...(comment.createdAt ? { createdAt: comment.createdAt } : {}),
-    ...(reviewComment?.path ? { path: reviewComment.path } : {}),
-    ...(reviewComment?.line !== undefined ? { line: reviewComment.line } : {}),
-    ...(reviewComment?.originalLine !== undefined
-      ? { originalLine: reviewComment.originalLine }
+    commentId: id,
+    body: truncateText(body, 4000),
+    ...(htmlUrl ? { htmlUrl } : {}),
+    ...(createdAt ? { createdAt } : {}),
+    ...(comment?.path ? { path: comment.path } : {}),
+    ...(comment?.line !== undefined ? { line: comment.line } : {}),
+    ...(comment?.originalLine !== undefined
+      ? { originalLine: comment.originalLine }
       : {}),
-    ...(reviewComment?.startLine !== undefined
-      ? { startLine: reviewComment.startLine }
+    ...(comment?.startLine !== undefined
+      ? { startLine: comment.startLine }
       : {}),
-    ...(reviewComment?.originalStartLine !== undefined
-      ? { originalStartLine: reviewComment.originalStartLine }
+    ...(comment?.originalStartLine !== undefined
+      ? { originalStartLine: comment.originalStartLine }
       : {}),
-    ...(reviewComment?.side ? { side: reviewComment.side } : {}),
-    ...(reviewComment?.startSide ? { startSide: reviewComment.startSide } : {}),
-    ...(reviewComment?.diffHunk
-      ? { diffHunk: truncateText(reviewComment.diffHunk, 8000) }
+    ...(comment?.side ? { side: comment.side } : {}),
+    ...(comment?.startSide ? { startSide: comment.startSide } : {}),
+    ...(comment?.diffHunk
+      ? { diffHunk: truncateText(comment.diffHunk, 8000) }
       : {}),
-    ...(reviewComment?.commitId ? { commitId: reviewComment.commitId } : {}),
-    ...(reviewComment?.originalCommitId
-      ? { originalCommitId: reviewComment.originalCommitId }
+    ...(comment?.commitId ? { commitId: comment.commitId } : {}),
+    ...(comment?.originalCommitId
+      ? { originalCommitId: comment.originalCommitId }
       : {}),
-    ...(reviewComment?.inReplyToId !== undefined
-      ? { inReplyToId: reviewComment.inReplyToId }
+    ...(comment?.inReplyToId !== undefined
+      ? { inReplyToId: comment.inReplyToId }
       : {}),
-    ...(reviewComment?.pullRequestReviewId !== undefined
-      ? { pullRequestReviewId: reviewComment.pullRequestReviewId }
+    ...(comment?.pullRequestReviewId !== undefined
+      ? { pullRequestReviewId: comment.pullRequestReviewId }
       : {}),
   };
 }
 
-function compareSourcedComments(
-  left: SourcedComment,
-  right: SourcedComment,
+function compareSourcedFindings(
+  left: SourcedFinding,
+  right: SourcedFinding,
 ): number {
+  const sourceOrder = { review: 0, review_comment: 1 };
   return (
-    left.comment.id - right.comment.id ||
-    left.source.localeCompare(right.source)
+    sourceOrder[left.source] - sourceOrder[right.source] || left.id - right.id
   );
 }
 
-function commentKey(
-  value: SourcedComment | { source: ReviewCommentSource; commentId: number },
+function findingKey(
+  value: SourcedFinding | { source: ReviewFindingSource; commentId: number },
 ): string {
-  const commentId = "comment" in value ? value.comment.id : value.commentId;
+  const commentId = "id" in value ? value.id : value.commentId;
   return `${value.source}:${commentId}`;
-}
-
-function nextCursor(
-  source: ReviewCommentSource,
-  previous: number,
-  comments: ReviewFixSubmission["commentRefs"],
-): number {
-  return comments
-    .filter((comment) => comment.source === source)
-    .reduce(
-      (maximum, comment) => Math.max(maximum, comment.commentId),
-      previous,
-    );
 }
 
 function skipped(
@@ -749,19 +732,8 @@ function skipped(
   return { ok: true, skipped: true, reason, repository, pullRequestNumber };
 }
 
-function requireReviewIdentities(dependencies: ReviewFixDependencies): void {
-  if (!dependencies.monkeyScanBotLogin.trim()) {
-    throw new Error("MonkeyScan bot login is required");
-  }
+function requireReviewBotIdentity(dependencies: ReviewFixDependencies): void {
   if (dependencies.apply && !dependencies.botLogin?.trim()) {
     throw new Error("Draft PR bot login is required in apply mode");
-  }
-  if (
-    dependencies.botLogin?.trim().toLowerCase() ===
-    dependencies.monkeyScanBotLogin.trim().toLowerCase()
-  ) {
-    throw new Error(
-      "MonkeyScan bot and Draft PR workflow bot must be different identities",
-    );
   }
 }

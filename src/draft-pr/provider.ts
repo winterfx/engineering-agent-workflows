@@ -1,11 +1,15 @@
 import type { IssuesClient } from "../issues/client.js";
 import type {
   PullRequest,
+  PullRequestReview,
   PullRequestReviewComment,
 } from "../pull-requests/types.js";
 
 export type DraftPullRequest = PullRequest;
-export type { PullRequestReviewComment } from "../pull-requests/types.js";
+export type {
+  PullRequestReview,
+  PullRequestReviewComment,
+} from "../pull-requests/types.js";
 
 export interface CheckRunAnnotation {
   path: string;
@@ -50,6 +54,14 @@ export interface DraftPrProvider extends IssuesClient {
     repository: string,
     input: { title: string; body: string; head: string; base: string },
   ): Promise<DraftPullRequest>;
+}
+
+export interface ReviewFixProvider extends DraftPrProvider {
+  getPullRequestReview(
+    repository: string,
+    pullRequestNumber: number,
+    reviewId: number,
+  ): Promise<PullRequestReview>;
 }
 
 export interface CiFixProvider extends DraftPrProvider {
