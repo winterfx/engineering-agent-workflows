@@ -7,10 +7,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm run build:issue-triage && npm run build:draft-pr",
-    "build:issue-triage": "esbuild src/issue-triage/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=agents/issue-triage/scripts/issue-triage.mjs && node scripts/normalize-generated.mjs agents/issue-triage/scripts/issue-triage.mjs",
-    "build:draft-pr": "esbuild src/draft-pr/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=agents/draft-pr/scripts/draft-pr.mjs && node scripts/normalize-generated.mjs agents/draft-pr/scripts/draft-pr.mjs",
-    "build:check": "issue_bundle_tmp=$(mktemp) && draft_bundle_tmp=$(mktemp) && esbuild src/issue-triage/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=$issue_bundle_tmp >/dev/null && esbuild src/draft-pr/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=$draft_bundle_tmp >/dev/null && node scripts/normalize-generated.mjs $issue_bundle_tmp $draft_bundle_tmp && cmp -s $issue_bundle_tmp agents/issue-triage/scripts/issue-triage.mjs && cmp -s $draft_bundle_tmp agents/draft-pr/scripts/draft-pr.mjs; build_check_status=$?; rm -f $issue_bundle_tmp $draft_bundle_tmp; exit $build_check_status",
+    "build": "tsx scripts/build-tools.ts",
+    "build:issue-triage": "tsx scripts/build-tools.ts issue-triage",
+    "build:draft-pr": "tsx scripts/build-tools.ts draft-pr",
+    "build:check": "tsx scripts/build-tools.ts --check",
     "check": "npm run format:check && npm run typecheck && npm test && npm run build:check",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

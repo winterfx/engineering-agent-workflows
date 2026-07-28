@@ -156,15 +156,17 @@ Keep apply mode disabled until dry-run output has been reviewed.
 
 ## Verify and run
 
+Generated tool bundles are versioned, so a clean checkout verifies them without
+rewriting them:
+
 ```bash
 npm ci
-npm run build
 npm run check
 agent-compose config --quiet
 agent-compose up
 ```
 
-After changing `src/`, tests must pass and generated bundles must be rebuilt.
+After changing `src/`, run `npm run build` before `npm run check`.
 Behavior changes require deterministic tests without public network or model
 calls.
 

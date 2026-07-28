@@ -1,24 +1,24 @@
-import { z } from "zod";
+import { array, number, object, record, string } from "zod";
 import type { IssueCandidate } from "../issues/types.js";
 import type { Priority, TriageAnalysis, TriageDecision } from "./schema.js";
 
-export const triagePolicySchema = z.object({
-  version: z.number().int().positive(),
-  duplicateConfidenceThreshold: z.number().min(0).max(1),
-  classificationConfidenceThreshold: z.number().min(0).max(1),
-  priorityConfidenceThreshold: z.number().min(0).max(1),
-  maxCandidates: z.number().int().min(0).max(100),
-  maxRelatedIssues: z.number().int().min(0).max(20),
-  skipLabels: z.array(z.string().min(1)),
-  managedLabelPrefixes: z.array(z.string().min(1)),
-  classificationLabels: z.object({
-    bug: z.string().min(1),
-    enhancement: z.string().min(1),
-    documentation: z.string().min(1),
-    question: z.string().min(1),
+export const triagePolicySchema = object({
+  version: number().int().positive(),
+  duplicateConfidenceThreshold: number().min(0).max(1),
+  classificationConfidenceThreshold: number().min(0).max(1),
+  priorityConfidenceThreshold: number().min(0).max(1),
+  maxCandidates: number().int().min(0).max(100),
+  maxRelatedIssues: number().int().min(0).max(20),
+  skipLabels: array(string().min(1)),
+  managedLabelPrefixes: array(string().min(1)),
+  classificationLabels: object({
+    bug: string().min(1),
+    enhancement: string().min(1),
+    documentation: string().min(1),
+    question: string().min(1),
   }),
-  labelColors: z.record(z.string(), z.string().regex(/^[0-9a-fA-F]{6}$/)),
-  labelDescriptions: z.record(z.string(), z.string().min(1).max(100)),
+  labelColors: record(string(), string().regex(/^[0-9a-fA-F]{6}$/)),
+  labelDescriptions: record(string(), string().min(1).max(100)),
 });
 
 export interface TriagePolicy {

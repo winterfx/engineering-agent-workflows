@@ -31,6 +31,32 @@ function agentWorkspaceVolume(workspacePath) {
   };
 }
 
+function runDeterministicTool(script, env, label) {
+  const result = scheduler.shell(script, {
+    sandboxPolicy: "new",
+    env,
+    volumes: [
+      {
+        type: "bind",
+        source: "./agents/draft-pr",
+        target: "/opt/draft-pr",
+        readOnly: true,
+      },
+      WORKSPACE_VOLUME,
+    ],
+    maxOutputBytes: 4 * 1024 * 1024,
+  });
+  const output = String(result.stdout || result.output || "").trim();
+  if (!result.success) {
+    throw new Error(label + " failed: " + output.slice(-4000));
+  }
+  try {
+    return JSON.parse(output);
+  } catch {
+    throw new Error(label + " returned invalid JSON: " + output.slice(-4000));
+  }
+}
+
 const ANALYSIS_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -178,7 +204,7 @@ const CI_ANALYSIS_SCHEMA = {
 };
 
 function runTool(command, repository, issueNumber, options) {
-  const result = scheduler.shell(
+  return runDeterministicTool(
     [
       "set -eu",
       'if [ "$DRAFT_PR_COMMAND" = "prepare" ]; then',
@@ -193,44 +219,21 @@ function runTool(command, repository, issueNumber, options) {
       "fi",
     ].join("\n"),
     {
-      sandboxPolicy: "new",
-      env: {
-        DRAFT_PR_EXPECTED_REPOSITORY: repository,
-        DRAFT_PR_EXPECTED_ISSUE: String(issueNumber),
-        DRAFT_PR_COMMAND: command,
-        DRAFT_PR_REPOSITORY: repository,
-        DRAFT_PR_ISSUE: String(issueNumber),
-        DRAFT_PR_TRIGGER: options?.trigger || "",
-        DRAFT_PR_SUBMISSION: options?.submission
-          ? JSON.stringify(options.submission)
-          : "",
-        DRAFT_PR_FAILURE: String(options?.message || "").slice(0, 2000),
-        DRAFT_PR_TOOL: TOOL_PATH,
-        DRAFT_PR_WORKSPACE_ROOT: "/draft-pr-workspaces",
-      },
-      volumes: [
-        {
-          type: "bind",
-          source: "./agents/draft-pr",
-          target: "/opt/draft-pr",
-          readOnly: true,
-        },
-        WORKSPACE_VOLUME,
-      ],
-      maxOutputBytes: 4 * 1024 * 1024,
+      DRAFT_PR_EXPECTED_REPOSITORY: repository,
+      DRAFT_PR_EXPECTED_ISSUE: String(issueNumber),
+      DRAFT_PR_COMMAND: command,
+      DRAFT_PR_REPOSITORY: repository,
+      DRAFT_PR_ISSUE: String(issueNumber),
+      DRAFT_PR_TRIGGER: options?.trigger || "",
+      DRAFT_PR_SUBMISSION: options?.submission
+        ? JSON.stringify(options.submission)
+        : "",
+      DRAFT_PR_FAILURE: String(options?.message || "").slice(0, 2000),
+      DRAFT_PR_TOOL: TOOL_PATH,
+      DRAFT_PR_WORKSPACE_ROOT: "/draft-pr-workspaces",
     },
+    "Draft PR tool",
   );
-  const output = String(result.stdout || result.output || "").trim();
-  if (!result.success) {
-    throw new Error("Draft PR tool failed: " + output.slice(-4000));
-  }
-  try {
-    return JSON.parse(output);
-  } catch {
-    throw new Error(
-      "Draft PR tool returned invalid JSON: " + output.slice(-4000),
-    );
-  }
 }
 
 function recordFailure(repository, issueNumber, error) {
@@ -270,7 +273,7 @@ function parseAgentJson(reply) {
 }
 
 function runReviewTool(command, repository, pullRequestNumber, options) {
-  const result = scheduler.shell(
+  return runDeterministicTool(
     [
       "set -eu",
       'if [ "$DRAFT_PR_COMMAND" = "prepare-review" ]; then',
@@ -285,54 +288,29 @@ function runReviewTool(command, repository, pullRequestNumber, options) {
       "fi",
     ].join("\n"),
     {
-      sandboxPolicy: "new",
-      env: {
-        DRAFT_PR_EXPECTED_REPOSITORY: repository,
-        DRAFT_PR_EXPECTED_PULL_REQUEST: pullRequestNumber
-          ? String(pullRequestNumber)
-          : "",
-        DRAFT_PR_COMMAND: command,
-        DRAFT_PR_REPOSITORY: repository,
-        DRAFT_PR_PULL_REQUEST: pullRequestNumber
-          ? String(pullRequestNumber)
-          : "",
-        DRAFT_PR_SUBMISSION: options?.submission
-          ? JSON.stringify(options.submission)
-          : "",
-        DRAFT_PR_REVIEW_ID: String(options?.reviewId || 0),
-        DRAFT_PR_REVIEW_CURSOR: String(options?.reviewCursor || 0),
-        DRAFT_PR_REVIEW_ITERATIONS: String(options?.iterations || 0),
-        DRAFT_PR_REVIEW_HEAD: String(options?.headSha || "none"),
-        DRAFT_PR_TOOL: TOOL_PATH,
-        DRAFT_PR_WORKSPACE_ROOT: "/draft-pr-workspaces",
-      },
-      volumes: [
-        {
-          type: "bind",
-          source: "./agents/draft-pr",
-          target: "/opt/draft-pr",
-          readOnly: true,
-        },
-        WORKSPACE_VOLUME,
-      ],
-      maxOutputBytes: 4 * 1024 * 1024,
+      DRAFT_PR_EXPECTED_REPOSITORY: repository,
+      DRAFT_PR_EXPECTED_PULL_REQUEST: pullRequestNumber
+        ? String(pullRequestNumber)
+        : "",
+      DRAFT_PR_COMMAND: command,
+      DRAFT_PR_REPOSITORY: repository,
+      DRAFT_PR_PULL_REQUEST: pullRequestNumber ? String(pullRequestNumber) : "",
+      DRAFT_PR_SUBMISSION: options?.submission
+        ? JSON.stringify(options.submission)
+        : "",
+      DRAFT_PR_REVIEW_ID: String(options?.reviewId || 0),
+      DRAFT_PR_REVIEW_CURSOR: String(options?.reviewCursor || 0),
+      DRAFT_PR_REVIEW_ITERATIONS: String(options?.iterations || 0),
+      DRAFT_PR_REVIEW_HEAD: String(options?.headSha || "none"),
+      DRAFT_PR_TOOL: TOOL_PATH,
+      DRAFT_PR_WORKSPACE_ROOT: "/draft-pr-workspaces",
     },
+    "Draft PR review tool",
   );
-  const output = String(result.stdout || result.output || "").trim();
-  if (!result.success) {
-    throw new Error("Draft PR review tool failed: " + output.slice(-4000));
-  }
-  try {
-    return JSON.parse(output);
-  } catch {
-    throw new Error(
-      "Draft PR review tool returned invalid JSON: " + output.slice(-4000),
-    );
-  }
 }
 
 function runCiTool(command, repository, pullRequestNumber, options) {
-  const result = scheduler.shell(
+  return runDeterministicTool(
     [
       "set -eu",
       'if [ "$DRAFT_PR_COMMAND" = "prepare-ci" ]; then',
@@ -347,45 +325,22 @@ function runCiTool(command, repository, pullRequestNumber, options) {
       "fi",
     ].join("\n"),
     {
-      sandboxPolicy: "new",
-      env: {
-        DRAFT_PR_EXPECTED_REPOSITORY: repository,
-        DRAFT_PR_EXPECTED_PULL_REQUEST: String(pullRequestNumber),
-        DRAFT_PR_COMMAND: command,
-        DRAFT_PR_REPOSITORY: repository,
-        DRAFT_PR_PULL_REQUEST: String(pullRequestNumber),
-        DRAFT_PR_CI_HEAD: String(options?.headSha || ""),
-        DRAFT_PR_CHECK_SUITE: String(options?.checkSuiteId || 0),
-        DRAFT_PR_CI_ATTEMPTS: String(options?.attempts || 0),
-        DRAFT_PR_SUBMISSION: options?.submission
-          ? JSON.stringify(options.submission)
-          : "",
-        DRAFT_PR_TOOL: TOOL_PATH,
-        DRAFT_PR_WORKSPACE_ROOT: "/draft-pr-workspaces",
-      },
-      volumes: [
-        {
-          type: "bind",
-          source: "./agents/draft-pr",
-          target: "/opt/draft-pr",
-          readOnly: true,
-        },
-        WORKSPACE_VOLUME,
-      ],
-      maxOutputBytes: 4 * 1024 * 1024,
+      DRAFT_PR_EXPECTED_REPOSITORY: repository,
+      DRAFT_PR_EXPECTED_PULL_REQUEST: String(pullRequestNumber),
+      DRAFT_PR_COMMAND: command,
+      DRAFT_PR_REPOSITORY: repository,
+      DRAFT_PR_PULL_REQUEST: String(pullRequestNumber),
+      DRAFT_PR_CI_HEAD: String(options?.headSha || ""),
+      DRAFT_PR_CHECK_SUITE: String(options?.checkSuiteId || 0),
+      DRAFT_PR_CI_ATTEMPTS: String(options?.attempts || 0),
+      DRAFT_PR_SUBMISSION: options?.submission
+        ? JSON.stringify(options.submission)
+        : "",
+      DRAFT_PR_TOOL: TOOL_PATH,
+      DRAFT_PR_WORKSPACE_ROOT: "/draft-pr-workspaces",
     },
+    "Draft PR CI tool",
   );
-  const output = String(result.stdout || result.output || "").trim();
-  if (!result.success) {
-    throw new Error("Draft PR CI tool failed: " + output.slice(-4000));
-  }
-  try {
-    return JSON.parse(output);
-  } catch {
-    throw new Error(
-      "Draft PR CI tool returned invalid JSON: " + output.slice(-4000),
-    );
-  }
 }
 
 function recordReviewFailure(repository, pullRequestNumber, prepared, error) {

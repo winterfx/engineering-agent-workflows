@@ -1,26 +1,33 @@
-import { z } from "zod";
+import {
+  array,
+  number,
+  object,
+  record,
+  string,
+  type infer as Infer,
+} from "zod";
 import type { DraftPrAnalysis, DraftPrInspection } from "./schema.js";
 
-export const draftPrPolicySchema = z.object({
-  version: z.number().int().positive(),
-  readyLabel: z.string().min(1),
-  approvedLabel: z.string().min(1),
-  runningLabel: z.string().min(1),
-  needsApprovalLabel: z.string().min(1),
-  prOpenLabel: z.string().min(1),
-  failedLabel: z.string().min(1),
-  skipLabels: z.array(z.string().min(1)),
-  blockedLabels: z.array(z.string().min(1)),
-  branchPrefix: z.string().regex(/^[a-zA-Z0-9._/-]+$/),
-  maxChangedFiles: z.number().int().positive().max(1000),
-  maxChangedLines: z.number().int().positive().max(100_000),
-  maxReviewComments: z.number().int().positive().max(100),
-  maxFixIterations: z.number().int().positive().max(20),
-  approvalPathPrefixes: z.array(z.string().min(1)),
-  labelColors: z.record(z.string(), z.string().regex(/^[0-9a-fA-F]{6}$/)),
+export const draftPrPolicySchema = object({
+  version: number().int().positive(),
+  readyLabel: string().min(1),
+  approvedLabel: string().min(1),
+  runningLabel: string().min(1),
+  needsApprovalLabel: string().min(1),
+  prOpenLabel: string().min(1),
+  failedLabel: string().min(1),
+  skipLabels: array(string().min(1)),
+  blockedLabels: array(string().min(1)),
+  branchPrefix: string().regex(/^[a-zA-Z0-9._/-]+$/),
+  maxChangedFiles: number().int().positive().max(1000),
+  maxChangedLines: number().int().positive().max(100_000),
+  maxReviewComments: number().int().positive().max(100),
+  maxFixIterations: number().int().positive().max(20),
+  approvalPathPrefixes: array(string().min(1)),
+  labelColors: record(string(), string().regex(/^[0-9a-fA-F]{6}$/)),
 });
 
-export type DraftPrPolicy = z.infer<typeof draftPrPolicySchema>;
+export type DraftPrPolicy = Infer<typeof draftPrPolicySchema>;
 
 export function requiresApproval(
   analysis: Pick<DraftPrAnalysis, "risk">,
