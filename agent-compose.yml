@@ -10,7 +10,7 @@ agents:
     description: Classify, prioritize, and relate GitHub Issues without rewriting titles.
     provider: codex
     model: ${ISSUE_TRIAGE_MODEL}
-    image: agent-compose-guest:local
+    image: ghcr.io/chaitin/agent-compose-guest:main
 
     driver:
       docker: {}
@@ -19,7 +19,6 @@ agents:
       GITHUB_TOKEN:
         value: ${GITHUB_TOKEN}
         secret: true
-      GITHUB_API_URL: ${GITHUB_API_URL}
       GITHUB_BOT_LOGIN: ${GITHUB_BOT_LOGIN}
       GITHUB_ALLOWED_REPOSITORY: ${GITHUB_ALLOWED_REPOSITORY}
       ISSUE_TRIAGE_APPLY: ${ISSUE_TRIAGE_APPLY}
@@ -52,14 +51,9 @@ agents:
       GITHUB_TOKEN:
         value: ${GITHUB_TOKEN}
         secret: true
-      GITHUB_API_URL: ${GITHUB_API_URL}
-      GITHUB_SERVER_URL: ${GITHUB_SERVER_URL}
       GITHUB_BOT_LOGIN: ${GITHUB_BOT_LOGIN}
       DRAFT_PR_ALLOWED_REPOSITORY: ${DRAFT_PR_ALLOWED_REPOSITORY}
       DRAFT_PR_APPLY: ${DRAFT_PR_APPLY}
-      DRAFT_PR_GIT_AUTHOR_NAME: ${DRAFT_PR_GIT_AUTHOR_NAME}
-      DRAFT_PR_GIT_AUTHOR_EMAIL: ${DRAFT_PR_GIT_AUTHOR_EMAIL}
-      DRAFT_PR_GIT_CURL_RESOLVE: ${DRAFT_PR_GIT_CURL_RESOLVE}
 
     skills:
       - name: draft-pr

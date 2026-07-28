@@ -146,8 +146,8 @@ Copy `.env.example` to `.env`. The main settings are:
 - bot identity: `GITHUB_BOT_LOGIN`;
 - apply switches: `ISSUE_TRIAGE_APPLY`, `DRAFT_PR_APPLY`;
 - Draft PR allowlist: `DRAFT_PR_ALLOWED_REPOSITORY`;
-- optional model, API URL, Git author, and workspace settings documented in
-  `.env.example` and `agent-compose.yml`.
+- optional model settings documented in `.env.example` and
+  `agent-compose.yml`.
 
 Webhook source credentials and public ingress configuration belong to the
 agent-compose deployment rather than this project's `.env`.
