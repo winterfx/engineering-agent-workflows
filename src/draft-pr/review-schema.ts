@@ -1,9 +1,9 @@
 import { z } from "zod";
 
-export const reviewCommentSourceSchema = z.literal("review");
+export const reviewFindingSourceSchema = z.enum(["review", "review_comment"]);
 
-const reviewCommentReferenceSchema = z.object({
-  source: reviewCommentSourceSchema,
+const reviewFindingReferenceSchema = z.object({
+  source: reviewFindingSourceSchema,
   commentId: z.number().int().positive(),
 });
 
@@ -20,7 +20,7 @@ export const reviewFixAnalysisSchema = z.object({
   findings: z
     .array(
       z.object({
-        source: reviewCommentSourceSchema,
+        source: reviewFindingSourceSchema,
         commentId: z.number().int().positive(),
         disposition: z.enum(["fixed", "not_reproducible", "needs_approval"]),
         reason: z.string().min(1).max(1000),
@@ -36,13 +36,13 @@ export const reviewFixAnalysisSchema = z.object({
 });
 
 export const reviewFixSubmissionSchema = z.object({
-  commentsFingerprint: z.string().regex(/^[0-9a-f]{20}$/),
-  commentRefs: z.array(reviewCommentReferenceSchema).min(1).max(100),
+  reviewId: z.number().int().positive(),
+  reviewFingerprint: z.string().regex(/^[0-9a-f]{20}$/),
+  findingRefs: z.array(reviewFindingReferenceSchema).min(1).max(100),
   workspacePath: z.string().min(1).max(2000),
   branch: z.string().min(1).max(250),
   baseBranch: z.string().min(1).max(250),
   expectedHeadSha: z.string().regex(/^[0-9a-f]{40}$/),
-  previousConversationCursor: z.number().int().nonnegative(),
   previousReviewCursor: z.number().int().nonnegative(),
   previousIterations: z.number().int().nonnegative(),
   analysis: reviewFixAnalysisSchema,
@@ -50,4 +50,4 @@ export const reviewFixSubmissionSchema = z.object({
 
 export type ReviewFixAnalysis = z.infer<typeof reviewFixAnalysisSchema>;
 export type ReviewFixSubmission = z.infer<typeof reviewFixSubmissionSchema>;
-export type ReviewCommentSource = z.infer<typeof reviewCommentSourceSchema>;
+export type ReviewFindingSource = z.infer<typeof reviewFindingSourceSchema>;

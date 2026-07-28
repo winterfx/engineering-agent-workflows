@@ -2,6 +2,7 @@ import type { Issue, IssueCandidate, IssueComment } from "../issues/types.js";
 import { issueSearchText } from "../issues/search.js";
 import type {
   PullRequest,
+  PullRequestReview,
   PullRequestReviewComment,
 } from "../pull-requests/types.js";
 import { truncateText } from "../runtime/text.js";
@@ -12,6 +13,7 @@ import type {
   GitHubIssueAPI,
   GitHubLabelAPI,
   GitHubPullRequestAPI,
+  GitHubPullRequestReviewAPI,
   GitHubPullRequestReviewCommentAPI,
   GitHubRepositoryAPI,
 } from "./types.js";
@@ -164,6 +166,18 @@ export class GitHubClient implements CiFixProvider {
       comments.push(...batch.map(normalizeReviewComment));
       if (batch.length < 100) return comments;
     }
+  }
+
+  async getPullRequestReview(
+    repository: string,
+    pullRequestNumber: number,
+    reviewId: number,
+  ): Promise<PullRequestReview> {
+    const review = await this.#request<GitHubPullRequestReviewAPI>(
+      "GET",
+      `/repos/${repositoryPath(repository)}/pulls/${pullRequestNumber}/reviews/${reviewId}`,
+    );
+    return normalizePullRequestReview(review);
   }
 
   async listCheckRuns(repository: string, ref: string): Promise<CheckRun[]> {
@@ -386,6 +400,21 @@ function normalizeReviewComment(
     ...(comment.pull_request_review_id !== undefined
       ? { pullRequestReviewId: comment.pull_request_review_id }
       : {}),
+  };
+}
+
+function normalizePullRequestReview(
+  review: GitHubPullRequestReviewAPI,
+): PullRequestReview {
+  return {
+    id: review.id,
+    body: review.body ?? "",
+    state: review.state,
+    commitId: review.commit_id,
+    authorAssociation: review.author_association,
+    ...(review.user ? { user: normalizeUser(review.user) } : {}),
+    ...(review.html_url ? { htmlUrl: review.html_url } : {}),
+    ...(review.submitted_at ? { submittedAt: review.submitted_at } : {}),
   };
 }
 

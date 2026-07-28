@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { DraftPrPolicy } from "../src/draft-pr/policy.js";
 import type {
-  DraftPrProvider,
   DraftPullRequest,
+  PullRequestReview,
   PullRequestReviewComment,
+  ReviewFixProvider,
 } from "../src/draft-pr/provider.js";
 import {
   applyReviewFix,
-  listReviewFixTargets,
-  monkeyScanEventAuthorReason,
   prepareReviewFix,
   type ReviewFixDependencies,
 } from "../src/draft-pr/review-tool.js";
@@ -25,10 +24,10 @@ import type {
 
 const repository = "chaitin/agent-compose";
 const pullRequestNumber = 440;
+const reviewId = 700;
 const headSha = "a".repeat(40);
 const botLogin = "engineering-agent-bot";
-const monkeyScanBotLogin = "monkeyscan[bot]";
-const monkeyScanBotUserId = 9001;
+const reviewer = { login: "maintainer", id: 42, type: "User" };
 const policy: DraftPrPolicy = {
   version: 1,
   readyLabel: "agent:ready",
@@ -48,7 +47,7 @@ const policy: DraftPrPolicy = {
   labelColors: {},
 };
 
-class FakeProvider implements DraftPrProvider {
+class FakeProvider implements ReviewFixProvider {
   pullRequest: DraftPullRequest = {
     number: pullRequestNumber,
     url: `https://github.test/${repository}/pull/${pullRequestNumber}`,
@@ -59,26 +58,45 @@ class FakeProvider implements DraftPrProvider {
     headRepository: repository,
     base: "main",
   };
+  review: PullRequestReview = {
+    id: reviewId,
+    body: "Please fix the recovery behavior and add coverage.",
+    state: "CHANGES_REQUESTED",
+    commitId: headSha,
+    authorAssociation: "MEMBER",
+    user: reviewer,
+    htmlUrl: `https://github.test/${repository}/pull/${pullRequestNumber}#pullrequestreview-${reviewId}`,
+    submittedAt: "2026-07-27T01:00:00Z",
+  };
   comments: IssueComment[] = [
     {
       id: 12,
-      body: "Human review note",
-      user: { login: "maintainer", id: 42, type: "User" },
+      body: "Ordinary PR conversation comment.",
+      user: reviewer,
     },
   ];
   reviewComments: PullRequestReviewComment[] = [
-    monkeyReviewComment(
+    reviewComment(
       11,
       "The error branch lacks a regression assertion.",
       "pkg/sessions/deletion_recovery_test.go",
       40,
     ),
-    monkeyReviewComment(
+    reviewComment(
       10,
       "LastError remains set after recovery finishes.",
       "pkg/sessions/deletion_recovery.go",
       104,
     ),
+    {
+      ...reviewComment(20, "Another review.", "pkg/other.go", 1),
+      pullRequestReviewId: 701,
+    },
+    { ...reviewComment(21, "A reply.", "pkg/other.go", 2), inReplyToId: 10 },
+    {
+      ...reviewComment(22, "Another author's note.", "pkg/other.go", 3),
+      user: { login: "external", id: 99 },
+    },
   ];
 
   async getIssue(): Promise<Issue> {
@@ -88,10 +106,7 @@ class FakeProvider implements DraftPrProvider {
     return [];
   }
   async listComments(): Promise<IssueComment[]> {
-    return this.comments.map((comment) => ({
-      ...comment,
-      ...(comment.user ? { user: { ...comment.user } } : {}),
-    }));
+    return structuredClone(this.comments);
   }
   async ensureLabel(): Promise<void> {}
   async addLabels(): Promise<void> {}
@@ -125,14 +140,14 @@ class FakeProvider implements DraftPrProvider {
   async getPullRequest(): Promise<DraftPullRequest> {
     return { ...this.pullRequest };
   }
+  async getPullRequestReview(): Promise<PullRequestReview> {
+    return structuredClone(this.review);
+  }
   async listOpenPullRequests(): Promise<DraftPullRequest[]> {
     return [{ ...this.pullRequest }];
   }
   async listReviewComments(): Promise<PullRequestReviewComment[]> {
-    return this.reviewComments.map((comment) => ({
-      ...comment,
-      ...(comment.user ? { user: { ...comment.user } } : {}),
-    }));
+    return structuredClone(this.reviewComments);
   }
   async listOpenPullRequestsByHead(): Promise<DraftPullRequest[]> {
     return [];
@@ -196,33 +211,37 @@ function dependencies(
     serverUrl: "https://github.test",
     apply,
     botLogin,
-    monkeyScanBotLogin,
-    monkeyScanBotUserId,
   };
 }
 
-describe("Draft PR MonkeyScan review fix", () => {
-  it("batches two unprocessed MonkeyScan comments into one push", async () => {
+describe("Draft PR requested-changes review fix", () => {
+  it("batches one trusted Review body and its inline comments into one push", async () => {
     const provider = new FakeProvider();
     const workspace = new FakeWorkspace();
     const deps = dependencies(provider, workspace);
+
     const prepared = await prepareReviewFix(
       repository,
       pullRequestNumber,
+      reviewId,
       deps,
     );
 
-    expect(prepared.findings?.map((finding) => finding.commentId)).toEqual([
-      10, 11,
-    ]);
     expect(prepared.findings).toEqual([
       expect.objectContaining({
         source: "review",
+        commentId: reviewId,
+        body: provider.review.body,
+      }),
+      expect.objectContaining({
+        source: "review_comment",
+        commentId: 10,
         path: "pkg/sessions/deletion_recovery.go",
         line: 104,
       }),
       expect.objectContaining({
-        source: "review",
+        source: "review_comment",
+        commentId: 11,
         path: "pkg/sessions/deletion_recovery_test.go",
         line: 40,
       }),
@@ -240,56 +259,119 @@ describe("Draft PR MonkeyScan review fix", () => {
     expect(workspace.commitCalls).toBe(1);
     expect(workspace.cleanupCalls).toBe(1);
     const status = provider.comments.find((comment) => comment.id === 1000)!;
-    expect(status.body).toContain("conversation=0 review=11 iterations=1");
+    expect(status.body).toContain("review=700 iterations=1");
     expect(status.body).toContain("status=fixed");
   });
 
-  it("ignores PR conversation comments while processing inline review comments", async () => {
+  it("does not treat ordinary PR conversation comments as findings", async () => {
     const provider = new FakeProvider();
-    provider.comments.unshift(
-      monkeyComment(10, "Conversation-level recovery finding."),
-    );
-    provider.reviewComments = [provider.reviewComments[1]!];
-    const workspace = new FakeWorkspace();
-    const deps = dependencies(provider, workspace);
+    provider.comments.unshift({
+      id: 500,
+      body: "Please also change an unrelated file.",
+      user: reviewer,
+    });
 
     const prepared = await prepareReviewFix(
       repository,
       pullRequestNumber,
-      deps,
+      reviewId,
+      dependencies(provider, new FakeWorkspace()),
     );
 
+    expect(prepared.findings).toHaveLength(3);
     expect(
-      prepared.findings?.map(({ source, commentId }) => ({
-        source,
-        commentId,
-      })),
-    ).toEqual([{ source: "review", commentId: 10 }]);
-
-    const result = await applyReviewFix(
-      repository,
-      pullRequestNumber,
-      submission(prepared),
-      deps,
-    );
-
-    expect(result.outcome).toBe("fixed");
-    expect(workspace.commitCalls).toBe(1);
-    expect(
-      provider.comments.find((comment) => comment.id === 1000)?.body,
-    ).toContain("conversation=0 review=10 iterations=1");
+      prepared.findings?.map((finding) => finding.commentId),
+    ).not.toContain(500);
   });
 
-  it("does not treat MonkeyScan PR conversation comments as findings", async () => {
+  it("handles one inline finding when the Review body is empty", async () => {
     const provider = new FakeProvider();
-    provider.reviewComments = [];
-    provider.comments.unshift(
-      monkeyComment(11, "New conversation finding."),
-      monkeyComment(10, "Old conversation finding."),
+    provider.review.body = "";
+    provider.reviewComments = [
+      reviewComment(
+        10,
+        "Fix this branch.",
+        "pkg/sessions/deletion_recovery.go",
+        104,
+      ),
+    ];
+
+    const prepared = await prepareReviewFix(
+      repository,
+      pullRequestNumber,
+      reviewId,
+      dependencies(provider, new FakeWorkspace()),
     );
+
+    expect(prepared.findings).toEqual([
+      expect.objectContaining({
+        source: "review_comment",
+        commentId: 10,
+        body: "Fix this branch.",
+      }),
+    ]);
+  });
+
+  it("pauses instead of silently truncating an oversized Review", async () => {
+    const provider = new FakeProvider();
+    const workspace = new FakeWorkspace();
+    const limitedPolicy = { ...policy, maxReviewComments: 2 };
+
+    const prepared = await prepareReviewFix(
+      repository,
+      pullRequestNumber,
+      reviewId,
+      {
+        ...dependencies(provider, workspace),
+        policy: limitedPolicy,
+      },
+    );
+
+    expect(prepared).toEqual(
+      expect.objectContaining({
+        skipped: true,
+        reason: expect.stringContaining("exceeding the automatic limit of 2"),
+      }),
+    );
+    expect(workspace.preparedReviewCalls).toBe(0);
+    expect(provider.comments.at(-1)?.body).toContain("status=needs-approval");
+  });
+
+  it.each([
+    ["APPROVED", "MEMBER", headSha, "not a change request"],
+    ["CHANGES_REQUESTED", "CONTRIBUTOR", headSha, "not a trusted"],
+    ["CHANGES_REQUESTED", "MEMBER", "c".repeat(40), "stale head"],
+  ])(
+    "skips ineligible Review state=%s association=%s",
+    async (state, association, commitId, expectedReason) => {
+      const provider = new FakeProvider();
+      provider.review.state = state;
+      provider.review.authorAssociation = association;
+      provider.review.commitId = commitId;
+      const workspace = new FakeWorkspace();
+
+      const prepared = await prepareReviewFix(
+        repository,
+        pullRequestNumber,
+        reviewId,
+        dependencies(provider, workspace),
+      );
+
+      expect(prepared).toEqual(
+        expect.objectContaining({
+          skipped: true,
+          reason: expect.stringContaining(expectedReason),
+        }),
+      );
+      expect(workspace.preparedReviewCalls).toBe(0);
+    },
+  );
+
+  it("does not replay an already processed Review", async () => {
+    const provider = new FakeProvider();
     provider.comments.push({
       id: 1000,
-      body: `<!-- engineering-agent-workflows:review-fix:v1 cursor=10 iterations=1 head=${headSha} status=fixed -->\n## MonkeyScan follow-up`,
+      body: `<!-- engineering-agent-workflows:review-fix:v3 review=${reviewId} iterations=1 head=${headSha} status=fixed -->\n## Review follow-up`,
       user: { login: botLogin, type: "Bot" },
     });
     const workspace = new FakeWorkspace();
@@ -297,134 +379,35 @@ describe("Draft PR MonkeyScan review fix", () => {
     const prepared = await prepareReviewFix(
       repository,
       pullRequestNumber,
+      reviewId,
       dependencies(provider, workspace),
     );
 
     expect(prepared).toEqual(
       expect.objectContaining({
         skipped: true,
-        reason: "no unprocessed MonkeyScan review comments",
+        reason: "Pull Request Review was already processed",
       }),
     );
     expect(workspace.preparedReviewCalls).toBe(0);
   });
 
-  it("rejects a changed Pull Request head before pushing", async () => {
+  it("rejects a changed Review before pushing", async () => {
     const provider = new FakeProvider();
     const workspace = new FakeWorkspace();
     const deps = dependencies(provider, workspace);
     const prepared = await prepareReviewFix(
       repository,
       pullRequestNumber,
+      reviewId,
       deps,
     );
-    provider.pullRequest.headSha = "c".repeat(40);
+    provider.review.body = "Changed after preparation.";
 
     await expect(
       applyReviewFix(repository, pullRequestNumber, submission(prepared), deps),
-    ).rejects.toThrow("head changed");
+    ).rejects.toThrow("Review changed");
     expect(workspace.commitCalls).toBe(0);
-  });
-
-  it("reconciliation finds an open managed Draft PR with pending comments", async () => {
-    const provider = new FakeProvider();
-    const workspace = new FakeWorkspace();
-
-    const result = await listReviewFixTargets(
-      repository,
-      dependencies(provider, workspace),
-    );
-
-    expect(result.targets).toEqual([{ pullRequestNumber, headSha }]);
-  });
-
-  it("validates webhook authors against the configured MonkeyScan identity", () => {
-    const deps = dependencies(new FakeProvider(), new FakeWorkspace());
-
-    expect(
-      monkeyScanEventAuthorReason(
-        monkeyScanBotLogin.toUpperCase(),
-        monkeyScanBotUserId,
-        deps,
-      ),
-    ).toBeUndefined();
-    expect(monkeyScanEventAuthorReason("maintainer", 42, deps)).toBe(
-      "review author is not MonkeyScan",
-    );
-    expect(monkeyScanEventAuthorReason(monkeyScanBotLogin, 42, deps)).toBe(
-      "MonkeyScan user ID mismatch",
-    );
-    deps.botLogin = monkeyScanBotLogin;
-    expect(
-      monkeyScanEventAuthorReason(
-        monkeyScanBotLogin,
-        monkeyScanBotUserId,
-        deps,
-      ),
-    ).toBe("workflow status comment is not a MonkeyScan finding");
-  });
-
-  it("skips reconciliation in dry-run before validating or listing targets", async () => {
-    const provider = new FakeProvider();
-    const workspace = new FakeWorkspace();
-    const deps = dependencies(provider, workspace);
-    deps.apply = false;
-    deps.allowedRepository = "";
-
-    const result = await listReviewFixTargets("", deps);
-
-    expect(result).toEqual({
-      ok: true,
-      ignored: true,
-      reason: "review reconciliation is disabled in dry-run",
-      repository: "",
-      targets: [],
-    });
-  });
-
-  it("rejects identical scanner and workflow bot identities", async () => {
-    const provider = new FakeProvider();
-    const workspace = new FakeWorkspace();
-    const deps = dependencies(provider, workspace);
-    deps.botLogin = monkeyScanBotLogin.toUpperCase();
-
-    await expect(listReviewFixTargets(repository, deps)).rejects.toThrow(
-      "must be different identities",
-    );
-    expect(workspace.preparedReviewCalls).toBe(0);
-  });
-
-  it("stops reconciliation at the iteration limit without advancing the cursor", async () => {
-    const provider = new FakeProvider();
-    provider.comments.push({
-      id: 1000,
-      body: `<!-- engineering-agent-workflows:review-fix:v1 cursor=10 iterations=3 head=${headSha} status=failed -->\n## MonkeyScan follow-up`,
-      user: { login: botLogin, type: "Bot" },
-    });
-    const workspace = new FakeWorkspace();
-    const deps = dependencies(provider, workspace);
-
-    const listed = await listReviewFixTargets(repository, deps);
-    const prepared = await prepareReviewFix(
-      repository,
-      pullRequestNumber,
-      deps,
-    );
-
-    expect(listed.targets).toEqual([]);
-    expect(prepared).toEqual(
-      expect.objectContaining({
-        skipped: true,
-        reason: "automatic MonkeyScan fix iteration limit reached",
-      }),
-    );
-    expect(
-      provider.comments.find((comment) => comment.id === 1000)?.body,
-    ).toContain("conversation=10 review=0 iterations=3");
-    expect(
-      provider.comments.find((comment) => comment.id === 1000)?.body,
-    ).toContain("status=needs-approval");
-    expect(workspace.preparedReviewCalls).toBe(0);
   });
 
   it("requires no_change to mark every finding not reproducible", async () => {
@@ -440,6 +423,7 @@ describe("Draft PR MonkeyScan review fix", () => {
     const prepared = await prepareReviewFix(
       repository,
       pullRequestNumber,
+      reviewId,
       deps,
     );
     const input = submission(prepared);
@@ -462,93 +446,41 @@ describe("Draft PR MonkeyScan review fix", () => {
         deps,
       ),
     ).rejects.toThrow("requires every finding to be not reproducible");
-    expect(workspace.commitCalls).toBe(0);
-  });
-
-  it("rejects fixed output containing an approval-gated finding", async () => {
-    const provider = new FakeProvider();
-    const workspace = new FakeWorkspace();
-    const deps = dependencies(provider, workspace);
-    const prepared = await prepareReviewFix(
-      repository,
-      pullRequestNumber,
-      deps,
-    );
-    const input = submission(prepared);
-
-    await expect(
-      applyReviewFix(
-        repository,
-        pullRequestNumber,
-        {
-          ...input,
-          analysis: {
-            ...input.analysis,
-            findings: input.analysis.findings.map((finding, index) => ({
-              ...finding,
-              disposition: index === 0 ? "needs_approval" : "fixed",
-            })),
-          },
-        },
-        deps,
-      ),
-    ).rejects.toThrow("cannot contain approval-gated findings");
-    expect(workspace.commitCalls).toBe(0);
   });
 });
 
 function submission(prepared: Awaited<ReturnType<typeof prepareReviewFix>>) {
-  const commentRefs = prepared.findings!.map((finding) => ({
+  const findingRefs = prepared.findings!.map((finding) => ({
     source: finding.source,
     commentId: finding.commentId,
   }));
   return {
-    commentsFingerprint: prepared.commentsFingerprint!,
-    commentRefs,
+    reviewId: prepared.reviewId!,
+    reviewFingerprint: prepared.reviewFingerprint!,
+    findingRefs,
     workspacePath: prepared.workspacePath!,
     branch: prepared.branch!,
     baseBranch: prepared.baseBranch!,
     expectedHeadSha: prepared.expectedHeadSha!,
-    previousConversationCursor: prepared.previousConversationCursor!,
     previousReviewCursor: prepared.previousReviewCursor!,
     previousIterations: prepared.previousIterations!,
     analysis: {
       outcome: "fixed" as const,
-      commitTitle: "fix(webhooks): address MonkeyScan findings",
-      summary: ["Keep the committed result and cover the error branch."],
-      findings: commentRefs.map((comment) => ({
-        ...comment,
+      commitTitle: "fix(webhooks): address requested changes",
+      summary: ["Address the requested changes."],
+      findings: findingRefs.map((finding) => ({
+        ...finding,
         disposition: "fixed" as const,
-        reason: "Validated and covered by the focused regression test.",
+        reason: "Validated and covered by focused tests.",
       })),
-      tests: [
-        {
-          command: "go test ./pkg/webhooks/...",
-          status: "passed" as const,
-          details: "Focused regression tests passed.",
-        },
-      ],
+      tests: [],
       risk: { level: "low" as const, reasons: ["Focused change."] },
       notes: [],
     },
   };
 }
 
-function monkeyComment(id: number, body: string): IssueComment {
-  return {
-    id,
-    body,
-    htmlUrl: `https://github.test/${repository}/pull/${pullRequestNumber}#issuecomment-${id}`,
-    createdAt: `2026-07-26T12:00:${id}Z`,
-    user: {
-      login: monkeyScanBotLogin,
-      id: monkeyScanBotUserId,
-      type: "Bot",
-    },
-  };
-}
-
-function monkeyReviewComment(
+function reviewComment(
   id: number,
   body: string,
   path: string,
@@ -559,14 +491,10 @@ function monkeyReviewComment(
     body,
     path,
     line,
-    diffHunk: `@@ -${line},0 +${line},1 @@`,
+    diffHunk: `@@ -${line},1 +${line},1 @@`,
     commitId: headSha,
-    htmlUrl: `https://github.test/${repository}/pull/${pullRequestNumber}#discussion_r${id}`,
-    createdAt: `2026-07-26T12:00:${id}Z`,
-    user: {
-      login: monkeyScanBotLogin,
-      id: monkeyScanBotUserId,
-      type: "Bot",
-    },
+    originalCommitId: headSha,
+    pullRequestReviewId: reviewId,
+    user: reviewer,
   };
 }

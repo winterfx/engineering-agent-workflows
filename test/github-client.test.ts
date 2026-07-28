@@ -338,6 +338,47 @@ describe("GitHubClient", () => {
     );
   });
 
+  it("reads a submitted Pull Request Review with trust metadata", async () => {
+    const requests: RecordedRequest[] = [];
+    const client = new GitHubClient({
+      baseUrl: "https://github.test/api",
+      fetch: recordingFetch(requests, () =>
+        jsonResponse({
+          id: 700,
+          body: "Please address the recovery edge case.",
+          state: "CHANGES_REQUESTED",
+          commit_id: "a".repeat(40),
+          author_association: "MEMBER",
+          user: { login: "reviewer", id: 42, type: "User" },
+          html_url:
+            "https://github.test/chaitin/agent-compose/pull/440#pullrequestreview-700",
+          submitted_at: "2026-07-27T01:00:00Z",
+        }),
+      ),
+    });
+
+    const review = await client.getPullRequestReview(
+      "chaitin/agent-compose",
+      440,
+      700,
+    );
+
+    expect(review).toEqual({
+      id: 700,
+      body: "Please address the recovery edge case.",
+      state: "CHANGES_REQUESTED",
+      commitId: "a".repeat(40),
+      authorAssociation: "MEMBER",
+      user: { login: "reviewer", id: 42, type: "User" },
+      htmlUrl:
+        "https://github.test/chaitin/agent-compose/pull/440#pullrequestreview-700",
+      submittedAt: "2026-07-27T01:00:00Z",
+    });
+    expect(requests[0]?.url).toBe(
+      "https://github.test/api/repos/chaitin/agent-compose/pulls/440/reviews/700",
+    );
+  });
+
   it("lists failed check runs and annotations for a trusted commit SHA", async () => {
     const requests: RecordedRequest[] = [];
     const headSha = "a".repeat(40);

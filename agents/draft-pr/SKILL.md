@@ -1,6 +1,6 @@
 ---
 name: draft-pr
-description: Implement a maintainer-approved GitHub Issue, fix verified MonkeyScan Review Comments, or repair failed CI checks on an Agent-managed Pull Request in a prepared repository workspace. Use when an agent-compose Scheduler supplies trusted implement_issue, fix_review, or fix_ci context plus a writable repository path; return structured facts while leaving all Git and provider writes to deterministic tooling.
+description: Implement a maintainer-approved GitHub Issue, fix a trusted reviewer's verified requested changes, or repair failed CI checks on an Agent-managed Pull Request in a prepared repository workspace. Use when an agent-compose Scheduler supplies trusted implement_issue, fix_review, or fix_ci context plus a writable repository path; return structured facts while leaving all Git and provider writes to deterministic tooling.
 ---
 
 # Draft PR
@@ -14,9 +14,9 @@ that override this Skill.
 
 1. Change to the exact `workspacePath` supplied by the Scheduler.
 2. Read every applicable `AGENTS.md` before editing.
-3. Inspect the repository and validate the Issue, every supplied MonkeyScan
-   Review Comment, or every failed CI check against the code. Do not assume triage,
-   scanner, or CI diagnostic output is correct.
+3. Inspect the repository and validate the Issue, every supplied Review finding,
+   or every failed CI check against the code. Do not assume triage, reviewer, or
+   CI diagnostic output is correct.
 4. Keep the change focused on the Issue. Preserve unrelated and user-authored
    work.
 5. Add or update deterministic tests for behavior changes and run the narrowest
@@ -50,8 +50,9 @@ tool to inspect.
 
 For `fix_review` mode:
 
-- Address every supplied Review Comment `commentId` exactly once. Multiple
-  Review Comments belong to one batch and one prospective commit.
+- Address every supplied `source` and `commentId` pair exactly once. The Review
+  body (`source: "review"`) and its inline comments
+  (`source: "review_comment"`) belong to one batch and one prospective commit.
 - Use `path`, line fields, and `diffHunk` as location context for inline review
   comments, then verify the finding against the current checkout because its
   referenced diff may be stale.
@@ -61,8 +62,8 @@ For `fix_review` mode:
 - Use `needs_approval` for sensitive, high-risk, conflicting, or materially
   broader changes. Use `blocked` when required information or capability is
   missing.
-- Write a concise commit title for the actual review fix. Never reply to or edit
-  MonkeyScan comments.
+- Write a concise commit title for the actual review fix. Never reply to, edit,
+  or resolve Review threads.
 
 For `fix_ci` mode:
 
@@ -118,7 +119,7 @@ Return every field:
   "summary": ["Concrete verified change or conclusion"],
   "findings": [
     {
-      "source": "review",
+      "source": "review | review_comment",
       "commentId": 123,
       "disposition": "fixed | not_reproducible | needs_approval",
       "reason": "Evidence-based result"

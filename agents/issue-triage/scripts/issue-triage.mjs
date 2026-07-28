@@ -126,6 +126,13 @@ var GitHubClient = class {
       if (batch.length < 100) return comments;
     }
   }
+  async getPullRequestReview(repository, pullRequestNumber, reviewId) {
+    const review = await this.#request(
+      "GET",
+      `/repos/${repositoryPath(repository)}/pulls/${pullRequestNumber}/reviews/${reviewId}`
+    );
+    return normalizePullRequestReview(review);
+  }
   async listCheckRuns(repository, ref) {
     if (!/^[0-9a-f]{40}$/.test(ref)) {
       throw new Error("invalid GitHub check run ref");
@@ -286,6 +293,18 @@ function normalizeReviewComment(comment) {
     ...comment.original_commit_id ? { originalCommitId: comment.original_commit_id } : {},
     ...comment.in_reply_to_id !== void 0 ? { inReplyToId: comment.in_reply_to_id } : {},
     ...comment.pull_request_review_id !== void 0 ? { pullRequestReviewId: comment.pull_request_review_id } : {}
+  };
+}
+function normalizePullRequestReview(review) {
+  return {
+    id: review.id,
+    body: review.body ?? "",
+    state: review.state,
+    commitId: review.commit_id,
+    authorAssociation: review.author_association,
+    ...review.user ? { user: normalizeUser(review.user) } : {},
+    ...review.html_url ? { htmlUrl: review.html_url } : {},
+    ...review.submitted_at ? { submittedAt: review.submitted_at } : {}
   };
 }
 function normalizeCheckRun(value) {

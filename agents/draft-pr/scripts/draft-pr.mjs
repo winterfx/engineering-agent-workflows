@@ -126,6 +126,13 @@ var GitHubClient = class {
       if (batch.length < 100) return comments;
     }
   }
+  async getPullRequestReview(repository, pullRequestNumber, reviewId) {
+    const review = await this.#request(
+      "GET",
+      `/repos/${repositoryPath(repository)}/pulls/${pullRequestNumber}/reviews/${reviewId}`
+    );
+    return normalizePullRequestReview(review);
+  }
   async listCheckRuns(repository, ref) {
     if (!/^[0-9a-f]{40}$/.test(ref)) {
       throw new Error("invalid GitHub check run ref");
@@ -288,6 +295,18 @@ function normalizeReviewComment(comment) {
     ...comment.pull_request_review_id !== void 0 ? { pullRequestReviewId: comment.pull_request_review_id } : {}
   };
 }
+function normalizePullRequestReview(review) {
+  return {
+    id: review.id,
+    body: review.body ?? "",
+    state: review.state,
+    commitId: review.commit_id,
+    authorAssociation: review.author_association,
+    ...review.user ? { user: normalizeUser(review.user) } : {},
+    ...review.html_url ? { htmlUrl: review.html_url } : {},
+    ...review.submitted_at ? { submittedAt: review.submitted_at } : {}
+  };
+}
 function normalizeCheckRun(value) {
   const checkSuiteId = value.check_suite?.id;
   if (!Number.isSafeInteger(checkSuiteId) || checkSuiteId <= 0) {
@@ -352,10 +371,6 @@ function requiredArgumentValue(args, index, name) {
 }
 function envBoolean(value) {
   return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
-}
-function isPositiveInteger(value) {
-  const number4 = Number(value?.trim());
-  return Number.isSafeInteger(number4) && number4 > 0;
 }
 
 // src/runtime/errors.ts
@@ -15882,6 +15897,7 @@ import crypto3 from "node:crypto";
 // src/draft-pr/review-comment.ts
 var REVIEW_FIX_COMMENT_PREFIX = "<!-- engineering-agent-workflows:review-fix:v";
 var REVIEW_FIX_COMMENT_V2_PREFIX = `${REVIEW_FIX_COMMENT_PREFIX}2`;
+var REVIEW_FIX_COMMENT_V3_PREFIX = `${REVIEW_FIX_COMMENT_PREFIX}3`;
 function findReviewFixComment(comments, botLogin) {
   const expected = botLogin.trim().toLowerCase();
   return comments.find(
@@ -15891,13 +15907,26 @@ function findReviewFixComment(comments, botLogin) {
 function parseReviewFixState(comment) {
   if (!comment) return emptyReviewFixState();
   const marker = comment.body.split("\n", 1)[0] ?? "";
+  const v3Match = marker.match(
+    /^<!-- engineering-agent-workflows:review-fix:v3 review=(\d+) iterations=(\d+) head=([0-9a-f]{40}|none) status=(fixing|fixed|no-change|needs-approval|failed) -->$/
+  );
+  if (v3Match) {
+    return {
+      reviewCursor: Number(v3Match[1]),
+      iterations: Number(v3Match[2]),
+      headSha: v3Match[3] === "none" ? "" : v3Match[3],
+      status: v3Match[4]
+    };
+  }
   const v2Match = marker.match(
     /^<!-- engineering-agent-workflows:review-fix:v2 conversation=(\d+) review=(\d+) iterations=(\d+) head=([0-9a-f]{40}|none) status=(fixing|fixed|no-change|needs-approval|failed) -->$/
   );
   if (v2Match) {
     return {
-      conversationCursor: Number(v2Match[1]),
-      reviewCursor: Number(v2Match[2]),
+      // v2 stored Conversation and inline Review Comment IDs, not Review IDs.
+      // Start the v3 Review cursor at zero so the first formal change request
+      // after upgrading is never skipped because the ID namespaces differ.
+      reviewCursor: 0,
       iterations: Number(v2Match[3]),
       headSha: v2Match[4] === "none" ? "" : v2Match[4],
       status: v2Match[5]
@@ -15908,7 +15937,6 @@ function parseReviewFixState(comment) {
   );
   if (!v1Match) return emptyReviewFixState();
   return {
-    conversationCursor: Number(v1Match[1]),
     reviewCursor: 0,
     iterations: Number(v1Match[2]),
     headSha: v1Match[3] === "none" ? "" : v1Match[3],
@@ -15916,21 +15944,18 @@ function parseReviewFixState(comment) {
   };
 }
 function buildReviewFixComment(state) {
-  const marker = `${REVIEW_FIX_COMMENT_V2_PREFIX} conversation=${state.conversationCursor} review=${state.reviewCursor} iterations=${state.iterations} head=${state.headSha || "none"} status=${state.status} -->`;
+  const marker = `${REVIEW_FIX_COMMENT_V3_PREFIX} review=${state.reviewCursor} iterations=${state.iterations} head=${state.headSha || "none"} status=${state.status} -->`;
   const messages = {
-    fixing: "The Draft PR Agent is validating new MonkeyScan findings.",
-    fixed: "The Draft PR Agent pushed a validated fix for the latest MonkeyScan findings.",
-    "no-change": "The Draft PR Agent verified the latest MonkeyScan findings and made no code change.",
-    "needs-approval": "Automatic MonkeyScan fixes paused for maintainer review.",
-    failed: "The Draft PR Agent could not complete the latest MonkeyScan fix attempt."
+    fixing: "The Draft PR Agent is validating a requested change.",
+    fixed: "The Draft PR Agent pushed a validated fix for the latest requested changes.",
+    "no-change": "The Draft PR Agent verified the latest requested changes and made no code change.",
+    "needs-approval": "Automatic Review fixes paused for maintainer approval.",
+    failed: "The Draft PR Agent could not complete the latest Review fix attempt."
   };
-  return [marker, "## MonkeyScan follow-up", "", messages[state.status]].join(
-    "\n"
-  );
+  return [marker, "## Review follow-up", "", messages[state.status]].join("\n");
 }
 function emptyReviewFixState() {
   return {
-    conversationCursor: 0,
     reviewCursor: 0,
     iterations: 0,
     headSha: "",
@@ -15939,9 +15964,9 @@ function emptyReviewFixState() {
 }
 
 // src/draft-pr/review-schema.ts
-var reviewCommentSourceSchema = external_exports.literal("review");
-var reviewCommentReferenceSchema = external_exports.object({
-  source: reviewCommentSourceSchema,
+var reviewFindingSourceSchema = external_exports.enum(["review", "review_comment"]);
+var reviewFindingReferenceSchema = external_exports.object({
+  source: reviewFindingSourceSchema,
   commentId: external_exports.number().int().positive()
 });
 var reviewTestSchema = external_exports.object({
@@ -15955,7 +15980,7 @@ var reviewFixAnalysisSchema = external_exports.object({
   summary: external_exports.array(external_exports.string().min(1).max(500)).max(8),
   findings: external_exports.array(
     external_exports.object({
-      source: reviewCommentSourceSchema,
+      source: reviewFindingSourceSchema,
       commentId: external_exports.number().int().positive(),
       disposition: external_exports.enum(["fixed", "not_reproducible", "needs_approval"]),
       reason: external_exports.string().min(1).max(1e3)
@@ -15969,98 +15994,54 @@ var reviewFixAnalysisSchema = external_exports.object({
   notes: external_exports.array(external_exports.string().min(1).max(500)).max(8)
 });
 var reviewFixSubmissionSchema = external_exports.object({
-  commentsFingerprint: external_exports.string().regex(/^[0-9a-f]{20}$/),
-  commentRefs: external_exports.array(reviewCommentReferenceSchema).min(1).max(100),
+  reviewId: external_exports.number().int().positive(),
+  reviewFingerprint: external_exports.string().regex(/^[0-9a-f]{20}$/),
+  findingRefs: external_exports.array(reviewFindingReferenceSchema).min(1).max(100),
   workspacePath: external_exports.string().min(1).max(2e3),
   branch: external_exports.string().min(1).max(250),
   baseBranch: external_exports.string().min(1).max(250),
   expectedHeadSha: external_exports.string().regex(/^[0-9a-f]{40}$/),
-  previousConversationCursor: external_exports.number().int().nonnegative(),
   previousReviewCursor: external_exports.number().int().nonnegative(),
   previousIterations: external_exports.number().int().nonnegative(),
   analysis: reviewFixAnalysisSchema
 });
 
 // src/draft-pr/review-tool.ts
-async function listReviewFixTargets(repository, dependencies) {
-  if (!dependencies.apply) {
-    return dryRunReviewReconciliation(repository);
-  }
+async function prepareReviewFix(repository, pullRequestNumber, reviewId, dependencies) {
   assertAllowedRepository(repository, dependencies.allowedRepository);
-  requireReviewIdentities(dependencies);
-  const pullRequests = await dependencies.provider.listOpenPullRequests(repository);
-  const targets = [];
-  for (const pullRequest of pullRequests) {
-    if (!eligiblePullRequest(pullRequest, repository, dependencies)) continue;
-    const [conversationComments, reviewComments] = await Promise.all([
-      dependencies.provider.listComments(repository, pullRequest.number),
-      dependencies.provider.listReviewComments(repository, pullRequest.number)
-    ]);
-    const state = reviewState(conversationComments, dependencies);
-    if (state.iterations < dependencies.policy.maxFixIterations && pendingMonkeyScanComments(reviewComments, state, dependencies).length) {
-      targets.push({
-        pullRequestNumber: pullRequest.number,
-        headSha: pullRequest.headSha
-      });
-    }
-  }
-  return { ok: true, repository, targets };
-}
-function dryRunReviewReconciliation(repository) {
-  return {
-    ok: true,
-    ignored: true,
-    reason: "review reconciliation is disabled in dry-run",
-    repository,
-    targets: []
-  };
-}
-function monkeyScanEventAuthorReason(login, userId, dependencies) {
-  const actualLogin = login.trim().toLowerCase();
-  const expectedLogin = dependencies.monkeyScanBotLogin.trim().toLowerCase();
-  if (!expectedLogin || actualLogin !== expectedLogin) {
-    return "review author is not MonkeyScan";
-  }
-  if (dependencies.botLogin?.trim().toLowerCase() && actualLogin === dependencies.botLogin.trim().toLowerCase()) {
-    return "workflow status comment is not a MonkeyScan finding";
-  }
-  if (dependencies.monkeyScanBotUserId !== void 0 && userId !== dependencies.monkeyScanBotUserId) {
-    return "MonkeyScan user ID mismatch";
-  }
-  return void 0;
-}
-async function prepareReviewFix(repository, pullRequestNumber, dependencies) {
-  assertAllowedRepository(repository, dependencies.allowedRepository);
-  requireReviewIdentities(dependencies);
-  const [pullRequest, conversationComments, reviewComments] = await Promise.all(
-    [
-      dependencies.provider.getPullRequest(repository, pullRequestNumber),
-      dependencies.provider.listComments(repository, pullRequestNumber),
-      dependencies.provider.listReviewComments(repository, pullRequestNumber)
-    ]
-  );
+  requireReviewBotIdentity(dependencies);
+  const [pullRequest, review, conversationComments, reviewComments] = await Promise.all([
+    dependencies.provider.getPullRequest(repository, pullRequestNumber),
+    dependencies.provider.getPullRequestReview(
+      repository,
+      pullRequestNumber,
+      reviewId
+    ),
+    dependencies.provider.listComments(repository, pullRequestNumber),
+    dependencies.provider.listReviewComments(repository, pullRequestNumber)
+  ]);
   const reason = ineligibleReason2(pullRequest, repository, dependencies);
   if (reason) return skipped2(repository, pullRequestNumber, reason);
+  const reviewReason = ineligibleReviewReason(review, pullRequest);
+  if (reviewReason) return skipped2(repository, pullRequestNumber, reviewReason);
   const state = reviewState(conversationComments, dependencies);
-  const pending = pendingMonkeyScanComments(
-    reviewComments,
-    state,
-    dependencies
-  ).slice(0, dependencies.policy.maxReviewComments);
-  if (pending.length === 0) {
+  if (review.id <= state.reviewCursor) {
     return skipped2(
       repository,
       pullRequestNumber,
-      "no unprocessed MonkeyScan review comments"
+      "Pull Request Review was already processed"
     );
   }
-  if (state.iterations >= dependencies.policy.maxFixIterations) {
+  const findings = findingsForReview(review, reviewComments);
+  if (findings.length === 0) {
+    return skipped2(repository, pullRequestNumber, "Review has no findings");
+  }
+  if (findings.length > dependencies.policy.maxReviewComments) {
     if (dependencies.apply) {
       await upsertReviewState(
         repository,
         pullRequestNumber,
         {
-          conversationCursor: state.conversationCursor,
           reviewCursor: state.reviewCursor,
           iterations: state.iterations,
           headSha: pullRequest.headSha,
@@ -16073,7 +16054,28 @@ async function prepareReviewFix(repository, pullRequestNumber, dependencies) {
     return skipped2(
       repository,
       pullRequestNumber,
-      "automatic MonkeyScan fix iteration limit reached"
+      `Review has ${findings.length} findings, exceeding the automatic limit of ${dependencies.policy.maxReviewComments}`
+    );
+  }
+  if (state.iterations >= dependencies.policy.maxFixIterations) {
+    if (dependencies.apply) {
+      await upsertReviewState(
+        repository,
+        pullRequestNumber,
+        {
+          reviewCursor: state.reviewCursor,
+          iterations: state.iterations,
+          headSha: pullRequest.headSha,
+          status: "needs-approval"
+        },
+        conversationComments,
+        dependencies
+      );
+    }
+    return skipped2(
+      repository,
+      pullRequestNumber,
+      "automatic Review fix iteration limit reached"
     );
   }
   let prepared;
@@ -16101,7 +16103,6 @@ async function prepareReviewFix(repository, pullRequestNumber, dependencies) {
       repository,
       pullRequestNumber,
       {
-        conversationCursor: state.conversationCursor,
         reviewCursor: state.reviewCursor,
         iterations: state.iterations,
         headSha: pullRequest.headSha,
@@ -16119,33 +16120,40 @@ async function prepareReviewFix(repository, pullRequestNumber, dependencies) {
     branch: prepared.branch,
     baseBranch: prepared.baseBranch,
     expectedHeadSha: prepared.baseCommit,
-    commentsFingerprint: fingerprintComments(pending),
-    previousConversationCursor: state.conversationCursor,
+    reviewId: review.id,
+    reviewFingerprint: fingerprintFindings(findings),
     previousReviewCursor: state.reviewCursor,
     previousIterations: state.iterations,
-    findings: pending.map((value) => toFinding(value))
+    findings: findings.map((value) => toFinding(value))
   };
 }
 async function applyReviewFix(repository, pullRequestNumber, submissionInput, dependencies) {
   assertAllowedRepository(repository, dependencies.allowedRepository);
-  requireReviewIdentities(dependencies);
+  requireReviewBotIdentity(dependencies);
   const submission = reviewFixSubmissionSchema.parse(submissionInput);
-  const [pullRequest, conversationComments, reviewComments] = await Promise.all(
-    [
-      dependencies.provider.getPullRequest(repository, pullRequestNumber),
-      dependencies.provider.listComments(repository, pullRequestNumber),
-      dependencies.provider.listReviewComments(repository, pullRequestNumber)
-    ]
-  );
+  const [pullRequest, review, conversationComments, reviewComments] = await Promise.all([
+    dependencies.provider.getPullRequest(repository, pullRequestNumber),
+    dependencies.provider.getPullRequestReview(
+      repository,
+      pullRequestNumber,
+      submission.reviewId
+    ),
+    dependencies.provider.listComments(repository, pullRequestNumber),
+    dependencies.provider.listReviewComments(repository, pullRequestNumber)
+  ]);
   const reason = ineligibleReason2(pullRequest, repository, dependencies);
   if (reason) throw new Error(reason);
+  const reviewReason = ineligibleReviewReason(review, pullRequest);
+  if (reviewReason) throw new Error(reviewReason);
   if (pullRequest.headSha !== submission.expectedHeadSha) {
     throw new Error("Pull Request head changed after review fix preparation");
   }
-  const expectedKeys = submission.commentRefs.map(commentKey);
-  const preparedComments = allMonkeyScanComments(reviewComments, dependencies).filter((value) => expectedKeys.includes(commentKey(value))).sort(compareSourcedComments);
-  if (new Set(expectedKeys).size !== expectedKeys.length || preparedComments.length !== submission.commentRefs.length || fingerprintComments(preparedComments) !== submission.commentsFingerprint) {
-    throw new Error("MonkeyScan comments changed after review fix preparation");
+  const expectedKeys = submission.findingRefs.map(findingKey);
+  const preparedFindings = findingsForReview(review, reviewComments);
+  if (new Set(expectedKeys).size !== expectedKeys.length || preparedFindings.length !== submission.findingRefs.length || preparedFindings.some(
+    (value) => !expectedKeys.includes(findingKey(value))
+  ) || fingerprintFindings(preparedFindings) !== submission.reviewFingerprint) {
+    throw new Error("Pull Request Review changed after fix preparation");
   }
   const inspection = await dependencies.workspace.inspect(
     submission.workspacePath
@@ -16155,13 +16163,11 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
       "the Agent committed or moved HEAD in the review workspace"
     );
   }
-  validateFindingCoverage(submission.analysis, submission.commentRefs);
+  validateFindingCoverage(submission.analysis, submission.findingRefs);
   const nextIterations = submission.previousIterations + 1;
-  const nextConversationCursor = submission.previousConversationCursor;
-  const nextReviewCursor = nextCursor(
-    "review",
+  const nextReviewCursor = Math.max(
     submission.previousReviewCursor,
-    submission.commentRefs
+    submission.reviewId
   );
   if (submission.analysis.outcome !== "fixed") {
     if (submission.analysis.outcome === "no_change" && inspection.changedFiles.length > 0) {
@@ -16171,7 +16177,6 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
     await finishWithoutPush2(
       repository,
       pullRequestNumber,
-      nextConversationCursor,
       nextReviewCursor,
       nextIterations,
       submission.expectedHeadSha,
@@ -16199,7 +16204,6 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
     await finishWithoutPush2(
       repository,
       pullRequestNumber,
-      nextConversationCursor,
       nextReviewCursor,
       nextIterations,
       submission.expectedHeadSha,
@@ -16238,7 +16242,6 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
     repository,
     pullRequestNumber,
     {
-      conversationCursor: nextConversationCursor,
       reviewCursor: nextReviewCursor,
       iterations: nextIterations,
       headSha: commit,
@@ -16258,7 +16261,7 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
     inspection
   };
 }
-async function failReviewFix(repository, pullRequestNumber, conversationCursor, reviewCursor, iterations, headSha, dependencies) {
+async function failReviewFix(repository, pullRequestNumber, reviewCursor, iterations, headSha, dependencies) {
   assertAllowedRepository(repository, dependencies.allowedRepository);
   try {
     if (dependencies.apply) {
@@ -16270,7 +16273,6 @@ async function failReviewFix(repository, pullRequestNumber, conversationCursor, 
         repository,
         pullRequestNumber,
         {
-          conversationCursor,
           reviewCursor,
           iterations,
           headSha,
@@ -16291,24 +16293,31 @@ async function failReviewFix(repository, pullRequestNumber, conversationCursor, 
     outcome: "failed"
   };
 }
-function pendingMonkeyScanComments(reviewComments, state, dependencies) {
-  return allMonkeyScanComments(reviewComments, dependencies).filter((value) => value.comment.id > state.reviewCursor).sort(compareSourcedComments);
-}
-function allMonkeyScanComments(reviewComments, dependencies) {
-  return reviewComments.map((comment) => ({
-    source: "review",
-    comment
-  })).filter((value) => isMonkeyScanComment(value.comment, dependencies));
-}
-function isMonkeyScanComment(comment, dependencies) {
-  const user = comment.user;
-  if (!user || user.login.trim().toLowerCase() !== dependencies.monkeyScanBotLogin.trim().toLowerCase()) {
-    return false;
+function findingsForReview(review, reviewComments) {
+  const findings = [];
+  if (review.body.trim()) {
+    findings.push({
+      source: "review",
+      id: review.id,
+      body: review.body,
+      ...review.htmlUrl ? { htmlUrl: review.htmlUrl } : {},
+      ...review.submittedAt ? { createdAt: review.submittedAt } : {},
+      review
+    });
   }
-  return dependencies.monkeyScanBotUserId === void 0 || user.id === dependencies.monkeyScanBotUserId;
-}
-function eligiblePullRequest(pullRequest, repository, dependencies) {
-  return !ineligibleReason2(pullRequest, repository, dependencies);
+  findings.push(
+    ...reviewComments.filter(
+      (comment) => comment.pullRequestReviewId === review.id && !comment.inReplyToId && sameUser(comment.user, review.user)
+    ).map((comment) => ({
+      source: "review_comment",
+      id: comment.id,
+      body: comment.body,
+      ...comment.htmlUrl ? { htmlUrl: comment.htmlUrl } : {},
+      ...comment.createdAt ? { createdAt: comment.createdAt } : {},
+      comment
+    }))
+  );
+  return findings.sort(compareSourcedFindings);
 }
 function ineligibleReason2(pullRequest, repository, dependencies) {
   if (pullRequest.state.toLowerCase() !== "open")
@@ -16325,13 +16334,35 @@ function ineligibleReason2(pullRequest, repository, dependencies) {
   }
   return void 0;
 }
-function validateFindingCoverage(analysis, expectedComments) {
-  const actual = analysis.findings.map(commentKey);
-  const expected = expectedComments.map(commentKey);
+function ineligibleReviewReason(review, pullRequest) {
+  if (review.state.trim().toLowerCase() !== "changes_requested") {
+    return "Pull Request Review is not a change request";
+  }
+  if (!review.user?.login.trim()) return "Pull Request Review has no author";
+  if (!trustedReviewerAssociation(review.authorAssociation)) {
+    return "Pull Request Review author is not a trusted repository member";
+  }
+  if (review.commitId !== pullRequest.headSha) {
+    return "Pull Request Review targets a stale head";
+  }
+  return void 0;
+}
+function trustedReviewerAssociation(value) {
+  return ["owner", "member", "collaborator"].includes(
+    value.trim().toLowerCase()
+  );
+}
+function sameUser(left, right) {
+  if (!left || !right) return false;
+  if (left.id !== void 0 && right.id !== void 0)
+    return left.id === right.id;
+  return left.login.trim().toLowerCase() === right.login.trim().toLowerCase();
+}
+function validateFindingCoverage(analysis, expectedFindings) {
+  const actual = analysis.findings.map(findingKey);
+  const expected = expectedFindings.map(findingKey);
   if (new Set(actual).size !== actual.length || actual.length !== expected.length || expected.some((key) => !actual.includes(key))) {
-    throw new Error(
-      "review result must address every prepared MonkeyScan comment once"
-    );
+    throw new Error("review result must address every prepared finding once");
   }
   if (analysis.outcome === "fixed" && analysis.findings.some(
     (finding) => finding.disposition === "needs_approval"
@@ -16367,12 +16398,12 @@ function validateFixedReview(analysis, inspection) {
     throw new Error("fixed review result reports a failed validation command");
   }
 }
-async function finishWithoutPush2(repository, pullRequestNumber, conversationCursor, reviewCursor, iterations, headSha, status, comments, dependencies) {
+async function finishWithoutPush2(repository, pullRequestNumber, reviewCursor, iterations, headSha, status, comments, dependencies) {
   if (dependencies.apply) {
     await upsertReviewState(
       repository,
       pullRequestNumber,
-      { conversationCursor, reviewCursor, iterations, headSha, status },
+      { reviewCursor, iterations, headSha, status },
       comments,
       dependencies
     );
@@ -16405,16 +16436,21 @@ function reviewState(comments, dependencies) {
   if (!botLogin) return parseReviewFixState(void 0);
   return parseReviewFixState(findReviewFixComment(comments, botLogin));
 }
-function fingerprintComments(comments) {
+function fingerprintFindings(findings) {
   return crypto3.createHash("sha256").update(
     JSON.stringify(
-      comments.map(({ source, comment }) => ({
+      findings.map(({ source, id, body, review, comment }) => ({
         source,
-        id: comment.id,
-        body: comment.body,
-        author: comment.user?.login ?? "",
-        authorId: comment.user?.id ?? null,
-        ...source === "review" ? {
+        id,
+        body,
+        author: (review?.user ?? comment?.user)?.login ?? "",
+        authorId: (review?.user ?? comment?.user)?.id ?? null,
+        ...review ? {
+          state: review.state,
+          commitId: review.commitId,
+          authorAssociation: review.authorAssociation
+        } : {},
+        ...comment ? {
           path: comment.path,
           line: comment.line ?? null,
           originalLine: comment.originalLine ?? null,
@@ -16425,55 +16461,48 @@ function fingerprintComments(comments) {
     )
   ).digest("hex").slice(0, 20);
 }
-function toFinding({ source, comment }) {
-  const reviewComment = source === "review" ? comment : void 0;
+function toFinding({
+  source,
+  id,
+  body,
+  htmlUrl,
+  createdAt,
+  comment
+}) {
   return {
     source,
-    commentId: comment.id,
-    body: truncateText(comment.body, 4e3),
-    ...comment.htmlUrl ? { htmlUrl: comment.htmlUrl } : {},
-    ...comment.createdAt ? { createdAt: comment.createdAt } : {},
-    ...reviewComment?.path ? { path: reviewComment.path } : {},
-    ...reviewComment?.line !== void 0 ? { line: reviewComment.line } : {},
-    ...reviewComment?.originalLine !== void 0 ? { originalLine: reviewComment.originalLine } : {},
-    ...reviewComment?.startLine !== void 0 ? { startLine: reviewComment.startLine } : {},
-    ...reviewComment?.originalStartLine !== void 0 ? { originalStartLine: reviewComment.originalStartLine } : {},
-    ...reviewComment?.side ? { side: reviewComment.side } : {},
-    ...reviewComment?.startSide ? { startSide: reviewComment.startSide } : {},
-    ...reviewComment?.diffHunk ? { diffHunk: truncateText(reviewComment.diffHunk, 8e3) } : {},
-    ...reviewComment?.commitId ? { commitId: reviewComment.commitId } : {},
-    ...reviewComment?.originalCommitId ? { originalCommitId: reviewComment.originalCommitId } : {},
-    ...reviewComment?.inReplyToId !== void 0 ? { inReplyToId: reviewComment.inReplyToId } : {},
-    ...reviewComment?.pullRequestReviewId !== void 0 ? { pullRequestReviewId: reviewComment.pullRequestReviewId } : {}
+    commentId: id,
+    body: truncateText(body, 4e3),
+    ...htmlUrl ? { htmlUrl } : {},
+    ...createdAt ? { createdAt } : {},
+    ...comment?.path ? { path: comment.path } : {},
+    ...comment?.line !== void 0 ? { line: comment.line } : {},
+    ...comment?.originalLine !== void 0 ? { originalLine: comment.originalLine } : {},
+    ...comment?.startLine !== void 0 ? { startLine: comment.startLine } : {},
+    ...comment?.originalStartLine !== void 0 ? { originalStartLine: comment.originalStartLine } : {},
+    ...comment?.side ? { side: comment.side } : {},
+    ...comment?.startSide ? { startSide: comment.startSide } : {},
+    ...comment?.diffHunk ? { diffHunk: truncateText(comment.diffHunk, 8e3) } : {},
+    ...comment?.commitId ? { commitId: comment.commitId } : {},
+    ...comment?.originalCommitId ? { originalCommitId: comment.originalCommitId } : {},
+    ...comment?.inReplyToId !== void 0 ? { inReplyToId: comment.inReplyToId } : {},
+    ...comment?.pullRequestReviewId !== void 0 ? { pullRequestReviewId: comment.pullRequestReviewId } : {}
   };
 }
-function compareSourcedComments(left, right) {
-  return left.comment.id - right.comment.id || left.source.localeCompare(right.source);
+function compareSourcedFindings(left, right) {
+  const sourceOrder = { review: 0, review_comment: 1 };
+  return sourceOrder[left.source] - sourceOrder[right.source] || left.id - right.id;
 }
-function commentKey(value) {
-  const commentId = "comment" in value ? value.comment.id : value.commentId;
+function findingKey(value) {
+  const commentId = "id" in value ? value.id : value.commentId;
   return `${value.source}:${commentId}`;
-}
-function nextCursor(source, previous, comments) {
-  return comments.filter((comment) => comment.source === source).reduce(
-    (maximum, comment) => Math.max(maximum, comment.commentId),
-    previous
-  );
 }
 function skipped2(repository, pullRequestNumber, reason) {
   return { ok: true, skipped: true, reason, repository, pullRequestNumber };
 }
-function requireReviewIdentities(dependencies) {
-  if (!dependencies.monkeyScanBotLogin.trim()) {
-    throw new Error("MonkeyScan bot login is required");
-  }
+function requireReviewBotIdentity(dependencies) {
   if (dependencies.apply && !dependencies.botLogin?.trim()) {
     throw new Error("Draft PR bot login is required in apply mode");
-  }
-  if (dependencies.botLogin?.trim().toLowerCase() === dependencies.monkeyScanBotLogin.trim().toLowerCase()) {
-    throw new Error(
-      "MonkeyScan bot and Draft PR workflow bot must be different identities"
-    );
   }
 }
 
@@ -17089,20 +17118,13 @@ async function main() {
       apply,
       process.env
     );
-  } else if (options.command !== "list-review-targets") {
+  } else {
     assertBoundReviewTarget(
       options.repository,
       options.pullRequestNumber,
       apply,
       process.env
     );
-  }
-  if (options.command === "list-review-targets" && !apply) {
-    process.stdout.write(
-      `${JSON.stringify(dryRunReviewReconciliation(allowedRepository), null, 2)}
-`
-    );
-    return;
   }
   const token = process.env.GITHUB_TOKEN?.trim() ?? "";
   const provider = new GitHubClient({
@@ -17123,16 +17145,8 @@ async function main() {
     allowedRepository,
     serverUrl: process.env.GITHUB_SERVER_URL?.trim() || "https://github.com",
     apply,
-    ...process.env.GITHUB_BOT_LOGIN ? { botLogin: process.env.GITHUB_BOT_LOGIN } : {},
-    monkeyScanBotLogin: process.env.MONKEYSCAN_BOT_LOGIN?.trim() ?? "",
-    ...isPositiveInteger(process.env.MONKEYSCAN_BOT_USER_ID) ? { monkeyScanBotUserId: Number(process.env.MONKEYSCAN_BOT_USER_ID) } : {}
+    ...process.env.GITHUB_BOT_LOGIN ? { botLogin: process.env.GITHUB_BOT_LOGIN } : {}
   };
-  const reviewRepository = options.command === "list-review-targets" && !options.repository ? dependencies.allowedRepository : options.repository;
-  const reviewEventReason = options.command === "prepare-review" && options.eventAuthorLogin ? monkeyScanEventAuthorReason(
-    options.eventAuthorLogin,
-    options.eventAuthorId,
-    dependencies
-  ) : void 0;
   const result = options.command === "prepare" ? await prepareDraftPr(
     options.repository,
     options.issueNumber,
@@ -17150,15 +17164,10 @@ async function main() {
     options.issueNumber,
     options.message ?? "Draft PR Agent execution failed",
     dependencies
-  ) : options.command === "list-review-targets" ? await listReviewFixTargets(reviewRepository, dependencies) : options.command === "prepare-review" ? reviewEventReason ? {
-    ok: true,
-    skipped: true,
-    reason: reviewEventReason,
-    repository: options.repository,
-    pullRequestNumber: options.pullRequestNumber
-  } : await prepareReviewFix(
+  ) : options.command === "prepare-review" ? await prepareReviewFix(
     options.repository,
     options.pullRequestNumber,
+    options.reviewId,
     dependencies
   ) : options.command === "apply-review" ? await applyReviewFix(
     options.repository,
@@ -17170,7 +17179,6 @@ async function main() {
   ) : options.command === "fail-review" ? await failReviewFix(
     options.repository,
     options.pullRequestNumber,
-    options.conversationCursor ?? 0,
     options.reviewCursor ?? 0,
     options.iterations ?? 0,
     options.headSha ?? "",
@@ -17211,7 +17219,7 @@ async function loadPolicy() {
 }
 function parseArguments(args) {
   const command = args.shift();
-  if (command !== "prepare" && command !== "apply" && command !== "fail" && command !== "list-review-targets" && command !== "prepare-review" && command !== "apply-review" && command !== "fail-review" && command !== "prepare-ci" && command !== "apply-ci" && command !== "fail-ci") {
+  if (command !== "prepare" && command !== "apply" && command !== "fail" && command !== "prepare-review" && command !== "apply-review" && command !== "fail-review" && command !== "prepare-ci" && command !== "apply-ci" && command !== "fail-ci") {
     throw new Error("invalid Draft PR tool command");
   }
   let repository = "";
@@ -17220,14 +17228,12 @@ function parseArguments(args) {
   let trigger = "";
   let analysisFile = "";
   let message = "";
-  let conversationCursor = 0;
+  let reviewId = 0;
   let reviewCursor = 0;
   let iterations = 0;
   let headSha = "";
   let checkSuiteId = 0;
   let attempts = 0;
-  let eventAuthorLogin = "";
-  let eventAuthorId = -1;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--repository") {
@@ -17244,10 +17250,8 @@ function parseArguments(args) {
       analysisFile = requiredArgumentValue(args, ++index, argument);
     } else if (argument === "--message") {
       message = requiredArgumentValue(args, ++index, argument);
-    } else if (argument === "--conversation-cursor") {
-      conversationCursor = Number(
-        requiredArgumentValue(args, ++index, argument)
-      );
+    } else if (argument === "--review") {
+      reviewId = Number(requiredArgumentValue(args, ++index, argument));
     } else if (argument === "--review-cursor") {
       reviewCursor = Number(requiredArgumentValue(args, ++index, argument));
     } else if (argument === "--iterations") {
@@ -17258,15 +17262,11 @@ function parseArguments(args) {
       checkSuiteId = Number(requiredArgumentValue(args, ++index, argument));
     } else if (argument === "--attempts") {
       attempts = Number(requiredArgumentValue(args, ++index, argument));
-    } else if (argument === "--event-author-login") {
-      eventAuthorLogin = requiredArgumentValue(args, ++index, argument);
-    } else if (argument === "--event-author-id") {
-      eventAuthorId = Number(requiredArgumentValue(args, ++index, argument));
     } else {
       throw new Error(`unknown argument: ${argument}`);
     }
   }
-  if (!isProjectPath(repository) && command !== "list-review-targets") {
+  if (!isProjectPath(repository)) {
     throw new Error("--repository must use owner/repository format");
   }
   if (["prepare", "apply", "fail"].includes(command) && (!Number.isSafeInteger(issueNumber) || issueNumber <= 0)) {
@@ -17285,6 +17285,9 @@ function parseArguments(args) {
   if (command === "prepare" && trigger !== "ready" && trigger !== "approved") {
     throw new Error("prepare requires --trigger ready or approved");
   }
+  if (command === "prepare-review" && (!Number.isSafeInteger(reviewId) || reviewId <= 0)) {
+    throw new Error("prepare-review requires --review");
+  }
   if ((command === "apply" || command === "apply-review" || command === "apply-ci") && !analysisFile) {
     throw new Error(`${command} requires --analysis`);
   }
@@ -17296,14 +17299,12 @@ function parseArguments(args) {
     ...trigger === "ready" || trigger === "approved" ? { trigger } : {},
     ...analysisFile ? { analysisFile } : {},
     ...message ? { message } : {},
-    ...conversationCursor ? { conversationCursor } : {},
+    ...reviewId ? { reviewId } : {},
     ...reviewCursor ? { reviewCursor } : {},
     ...iterations ? { iterations } : {},
     ...headSha ? { headSha } : {},
     ...Number.isSafeInteger(checkSuiteId) && checkSuiteId > 0 ? { checkSuiteId } : {},
-    ...Number.isSafeInteger(attempts) && attempts >= 0 ? { attempts } : {},
-    ...eventAuthorLogin ? { eventAuthorLogin } : {},
-    ...Number.isSafeInteger(eventAuthorId) && eventAuthorId >= 0 ? { eventAuthorId } : {}
+    ...Number.isSafeInteger(attempts) && attempts >= 0 ? { attempts } : {}
   };
 }
 main().catch((error51) => {
