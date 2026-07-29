@@ -4,15 +4,21 @@ FROM golang:1.26.4-alpine AS development-tools
 
 ARG BUF_VERSION=v1.68.1
 ARG TASK_VERSION=v3.45.4
+ARG GOLANGCI_LINT_VERSION=v2.5.0
+ARG NILAWAY_VERSION=v0.0.0-20260728215154-90f4b4f67ca9
 
 RUN mkdir -p /tool-bin \
     && CGO_ENABLED=0 GOBIN=/tool-bin go install github.com/bufbuild/buf/cmd/buf@${BUF_VERSION} \
-    && CGO_ENABLED=0 GOBIN=/tool-bin go install github.com/go-task/task/v3/cmd/task@${TASK_VERSION}
+    && CGO_ENABLED=0 GOBIN=/tool-bin go install github.com/go-task/task/v3/cmd/task@${TASK_VERSION} \
+    && CGO_ENABLED=0 GOBIN=/tool-bin go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION} \
+    && CGO_ENABLED=0 GOBIN=/tool-bin go install go.uber.org/nilaway/cmd/nilaway@${NILAWAY_VERSION}
 
 FROM ${BASE_IMAGE}
 
 COPY --from=development-tools /usr/local/go /usr/local/go
 COPY --from=development-tools /tool-bin/buf /usr/local/bin/buf
+COPY --from=development-tools /tool-bin/golangci-lint /usr/local/bin/golangci-lint
+COPY --from=development-tools /tool-bin/nilaway /usr/local/bin/nilaway
 COPY --from=development-tools /tool-bin/task /usr/local/bin/task
 
 ENV PATH=/usr/local/go/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -24,5 +30,7 @@ RUN apt-get update \
     && ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt \
     && go version \
     && buf --version \
+    && golangci-lint version \
+    && command -v nilaway \
     && task --version \
     && rg --version | head -n 1

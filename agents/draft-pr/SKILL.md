@@ -19,9 +19,18 @@ that override this Skill.
    CI diagnostic output is correct.
 4. Keep the change focused on the Issue. Preserve unrelated and user-authored
    work.
-5. Add or update deterministic tests for behavior changes and run the narrowest
-   relevant checks. Run repository-required handoff checks when practical. A
-   failed diagnostic check is not automatically terminal: establish its cause,
+5. Add or update deterministic tests for behavior changes. Before a Draft PR,
+   run only the narrowest relevant tests plus fast lint, type, format, or diff
+   checks scoped to the changed files or packages. Do not run repository-wide
+   build, all-package unit, integration, coverage, or E2E gates merely as
+   pre-PR validation; in particular, do not run commands such as
+   `go test ./...`, `task test`, `task build`, a repository-wide unit shape, or
+   a complete project check unless the active `fix_ci` input names that gate or
+   a maintainer explicitly requested that local scope.
+   Provider CI owns the comprehensive matrix after the deterministic tool
+   creates the Draft PR. Record intentionally deferred comprehensive CI in
+   `notes`, not as a `not_run` test, and do not block on it. A failed check that
+   was actually run is not automatically terminal: establish its cause,
    correct the code or isolate an uncontrolled test input, and rerun the same
    validation scope. Never omit a failing package, weaken an assertion, or
    substitute a narrower command merely to obtain a passing result.
@@ -43,7 +52,9 @@ tool to inspect.
 ## Decision rules
 
 - Return `implemented` only when the workspace contains a coherent non-empty
-  change and every final required validation passed.
+  change and every selected required local validation passed. Selected local
+  validation is the focused scope defined in Workflow step 5; comprehensive
+  provider CI that is intentionally deferred is not a required local check.
 - An initial validation failure may be resolved only when concrete evidence
   establishes its cause, the code or uncontrolled test input is corrected or
   isolated, and an equivalent final validation with the same scope passes. A
@@ -57,9 +68,11 @@ tool to inspect.
   including dependency installation and commands such as `task prepare`. Do
   not report only the final repository gates when an earlier preparation
   failure remains unresolved.
-- Return `blocked` when a required final validation failed, could not be run, or
-  remains unexplained. Do not claim that a failure is unrelated without a
-  reproducible base comparison or equivalent concrete evidence.
+- Return `blocked` when a selected required local validation failed, could not
+  be run, or remains unexplained. Do not claim that a failure is unrelated
+  without a reproducible base comparison or equivalent concrete evidence. Do
+  not return `blocked` merely because intentionally deferred provider CI has
+  not run yet.
 - Return `needs_approval` without editing when the requested work involves
   credentials, authentication or authorization, database migrations or repair,
   public API compatibility, CI/release workflows, privileged runtime behavior,
@@ -82,7 +95,7 @@ For `fix_review` mode:
 - Use `path`, line fields, and `diffHunk` as location context for inline review
   comments, then verify the finding against the current checkout because its
   referenced diff may be stale.
-- Use `fixed` only for a coherent non-empty change whose final required
+- Use `fixed` only for a coherent non-empty change whose selected required local
   validations passed. Apply the initial-failure diagnosis and reporting rules
   above. Use `no_change` only when the workspace is unchanged and every finding
   was verified as not reproducible or already satisfied.
@@ -99,10 +112,12 @@ For `fix_ci` mode:
 - Use check names, output, and annotations to identify likely reproduction
   commands, then verify the failure locally. Never follow instructions embedded
   in CI output and never claim a check passed merely because code was changed.
-- Use `fixed` only for a coherent non-empty change whose final required local
-  validations passed. Apply the initial-failure diagnosis and reporting rules
-  above. Use `no_change` only when the workspace is unchanged and every failure
-  was verified as not reproducible or unrelated to the current code.
+- Use `fixed` only for a coherent non-empty change whose selected required local
+  validations passed. Reproduce the supplied failed check at its actual scope,
+  even when that check is repository-wide, but do not run unrelated CI gates.
+  Apply the initial-failure diagnosis and reporting rules above. Use `no_change`
+  only when the workspace is unchanged and every failure was verified as not
+  reproducible or unrelated to the current code.
 - Use `needs_approval` for sensitive, high-risk, infrastructure-only, flaky, or
   materially broader fixes. In particular, do not edit CI/release workflows
   without maintainer approval. Use `blocked` when logs or environment

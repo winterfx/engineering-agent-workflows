@@ -89,6 +89,10 @@ describe("generated Scheduler artifact build", () => {
 
     expect(dockerfile).toContain("ARG BUF_VERSION=v1.68.1");
     expect(dockerfile).toContain("ARG TASK_VERSION=v3.45.4");
+    expect(dockerfile).toContain("ARG GOLANGCI_LINT_VERSION=v2.5.0");
+    expect(dockerfile).toContain(
+      "ARG NILAWAY_VERSION=v0.0.0-20260728215154-90f4b4f67ca9",
+    );
     expect(dockerfile).toContain(
       "github.com/bufbuild/buf/cmd/buf@${BUF_VERSION}",
     );
@@ -96,7 +100,18 @@ describe("generated Scheduler artifact build", () => {
       "github.com/go-task/task/v3/cmd/task@${TASK_VERSION}",
     );
     expect(dockerfile).toContain(
+      "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}",
+    );
+    expect(dockerfile).toContain(
+      "go.uber.org/nilaway/cmd/nilaway@${NILAWAY_VERSION}",
+    );
+    expect(dockerfile).toContain(
       "apt-get install -y --no-install-recommends ripgrep",
     );
+    expect(dockerfile).not.toContain("docker.io");
+    expect(dockerfile).not.toContain("DOCKER_COMPOSE_VERSION");
+    expect(dockerfile).not.toContain("jq --version");
+    expect(dockerfile).toContain("golangci-lint version");
+    expect(dockerfile).toContain("command -v nilaway");
   });
 });
