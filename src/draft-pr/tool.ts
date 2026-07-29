@@ -208,7 +208,10 @@ export async function applyDraftPr(
   }
   const analysis = submission.analysis;
   if (analysis.outcome !== "implemented") {
-    const reasons = outcomeReasons(analysis);
+    const reasons =
+      analysis.outcome === "needs_approval"
+        ? outcomeReasons(analysis)
+        : failureReasons(analysis);
     if (analysis.outcome === "needs_approval") {
       await transitionNeedsApproval(
         repository,
@@ -569,6 +572,23 @@ function validateImplementedAnalysis(
 
 function outcomeReasons(analysis: DraftPrAnalysis): string[] {
   return [
+    ...analysis.risk.reasons,
+    ...analysis.notes,
+    ...analysis.summary,
+  ].slice(0, 8);
+}
+
+function failureReasons(analysis: DraftPrAnalysis): string[] {
+  const validationFailures = analysis.tests
+    .filter((test) => test.status === "failed" || test.status === "not_run")
+    .map((test) => {
+      const prefix =
+        test.status === "failed" ? "Validation failed" : "Validation not run";
+      return `${prefix}: ${test.command}${test.details ? ` — ${test.details}` : ""}`;
+    });
+
+  return [
+    ...validationFailures,
     ...analysis.risk.reasons,
     ...analysis.notes,
     ...analysis.summary,

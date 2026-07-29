@@ -53,6 +53,10 @@ tool to inspect.
   as `passed` and use `details` to preserve the initial failure, diagnosed
   cause, corrective action, and final evidence. Never omit an unresolved
   failure from `tests` or relabel it as `passed`.
+- Include every unresolved preparation or validation failure in `tests`,
+  including dependency installation and commands such as `task prepare`. Do
+  not report only the final repository gates when an earlier preparation
+  failure remains unresolved.
 - Return `blocked` when a required final validation failed, could not be run, or
   remains unexplained. Do not claim that a failure is unrelated without a
   reproducible base comparison or equivalent concrete evidence.

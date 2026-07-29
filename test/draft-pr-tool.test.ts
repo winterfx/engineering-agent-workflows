@@ -444,6 +444,54 @@ describe("Draft PR tool", () => {
     expect(workspace.cleanupCalls).toBe(1);
   });
 
+  it("reports failed and unavailable validations in the managed Issue comment", async () => {
+    const provider = new FakeProvider();
+    const workspace = new FakeWorkspace();
+    const deps = dependencies(provider, workspace);
+    const prepared = await prepareDraftPr(
+      repository,
+      issue.number,
+      "ready",
+      deps,
+    );
+    const input = submission(prepared);
+    input.analysis = {
+      ...analysis,
+      outcome: "blocked",
+      tests: [
+        {
+          command: "task prepare",
+          status: "failed",
+          details:
+            "Concurrent npm ci processes raced; Authorization: Bearer sensitive-value was not logged.",
+        },
+        {
+          command: "task build",
+          status: "not_run",
+          details: "Docker daemon access is unavailable.",
+        },
+      ],
+    };
+
+    const result = await applyDraftPr(repository, issue.number, input, deps);
+
+    expect(result.outcome).toBe("blocked");
+    expect(provider.issue.labels).toContain("agent:failed");
+    expect(provider.issue.labels).not.toContain("agent:running");
+    expect(provider.comments).toHaveLength(1);
+    expect(provider.comments[0]?.body).toContain(
+      "Validation failed: task prepare",
+    );
+    expect(provider.comments[0]?.body).toContain(
+      "Validation not run: task build",
+    );
+    expect(provider.comments[0]?.body).toContain("Docker daemon access");
+    expect(provider.comments[0]?.body).not.toContain("sensitive-value");
+    expect(provider.comments[0]?.body).toContain("Authorization: <redacted>");
+    expect(workspace.commitCalls).toBe(0);
+    expect(workspace.cleanupCalls).toBe(1);
+  });
+
   it("rejects reported test failures before pushing", async () => {
     const provider = new FakeProvider();
     const workspace = new FakeWorkspace();
