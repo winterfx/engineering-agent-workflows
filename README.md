@@ -119,8 +119,8 @@ Requirements:
 - Node.js 20 or newer
 - agent-compose with skills, event schedulers, and bind volumes
 - `./.draft-pr-workspaces` writable by the daemon and Agent sandbox
-- a Draft PR development image containing Go, `buf`, Task, and `ripgrep`; the
-  published default is configured through `DRAFT_PR_IMAGE`
+- the local `agent-compose-guest-dev:local` Draft PR development image,
+  containing Go, `buf`, Task, and `ripgrep`
 
 Before each Agent run, the Scheduler performs a credential-free workspace
 preparation step. Repositories containing `buf.gen.yaml` run `buf generate` in
@@ -159,7 +159,6 @@ Copy `.env.example` to `.env`. The main settings are:
 - bot identity: `GITHUB_BOT_LOGIN`;
 - apply switches: `ISSUE_TRIAGE_APPLY`, `DRAFT_PR_APPLY`;
 - Draft PR allowlist: `DRAFT_PR_ALLOWED_REPOSITORY`;
-- Draft PR development image: `DRAFT_PR_IMAGE`;
 - optional model settings documented in `.env.example` and
   `agent-compose.yml`.
 
