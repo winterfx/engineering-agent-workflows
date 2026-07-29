@@ -361,6 +361,254 @@
         line-height: 1.65;
       }
 
+      .runtime-stage {
+        position: relative;
+        overflow: hidden;
+        padding: 30px;
+        border: 1px solid var(--line-strong);
+        border-radius: 15px 11px 17px 10px;
+        background: rgba(255, 255, 255, 0.24);
+      }
+
+      .runtime-stage::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background: radial-gradient(
+          circle at var(--glow-x, 8%) 50%,
+          rgba(189, 91, 62, 0.12),
+          transparent 19%
+        );
+        transition: background-position 500ms ease;
+      }
+
+      .runtime-toolbar,
+      .runtime-meta,
+      .runtime-controls,
+      .runtime-status,
+      .runtime-route {
+        position: relative;
+        z-index: 2;
+      }
+
+      .runtime-toolbar {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 24px;
+        padding-bottom: 22px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .runtime-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+      }
+
+      .runtime-meta code {
+        padding: 6px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px 8px 5px 9px;
+        background: rgba(255, 255, 255, 0.28);
+        font-size: 9px;
+      }
+
+      .runtime-controls {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 7px;
+      }
+
+      .runtime-button {
+        min-height: 34px;
+        padding: 7px 11px;
+        border: 1px solid var(--line-strong);
+        border-radius: 7px 9px 6px 10px;
+        color: var(--muted);
+        background: transparent;
+        font: inherit;
+        font-size: 10px;
+        cursor: pointer;
+      }
+
+      .runtime-button:hover,
+      .runtime-button:focus-visible {
+        color: var(--ink);
+        background: rgba(255, 255, 255, 0.36);
+      }
+
+      .runtime-button[aria-pressed="true"] {
+        color: var(--paper);
+        border-color: var(--ink);
+        background: var(--ink);
+      }
+
+      .runtime-button.replay {
+        color: var(--rust);
+        border-color: rgba(189, 91, 62, 0.58);
+      }
+
+      .runtime-route {
+        display: grid;
+        grid-template-columns:
+          minmax(106px, 1fr) 34px minmax(106px, 1fr) 34px minmax(106px, 1fr)
+          34px minmax(106px, 1fr) 34px minmax(106px, 1fr) 34px
+          minmax(106px, 1fr);
+        align-items: stretch;
+        padding: 38px 0 24px;
+      }
+
+      .runtime-node {
+        position: relative;
+        min-height: 172px;
+        display: flex;
+        flex-direction: column;
+        padding: 16px 14px;
+        border: 1px solid var(--line);
+        border-radius: 10px 7px 12px 8px;
+        background: rgba(244, 240, 231, 0.76);
+        opacity: 0.5;
+        transform: translateY(6px);
+        transition:
+          opacity 320ms ease,
+          transform 320ms ease,
+          border-color 320ms ease,
+          background 320ms ease,
+          box-shadow 320ms ease;
+      }
+
+      .runtime-node.is-complete {
+        opacity: 0.78;
+        transform: translateY(0);
+      }
+
+      .runtime-node.is-active {
+        opacity: 1;
+        transform: translateY(-5px) rotate(-0.35deg);
+        border-color: var(--line-strong);
+        background: var(--paper);
+        box-shadow: 5px 6px 0 rgba(40, 37, 31, 0.08);
+      }
+
+      .runtime-node.is-trusted.is-active {
+        border-color: var(--sage);
+      }
+
+      .runtime-node.is-agent.is-active {
+        border-color: var(--rust);
+        background: rgba(232, 192, 174, 0.24);
+      }
+
+      .runtime-node-num {
+        margin-bottom: 22px;
+        color: var(--rust);
+        font-family: var(--hand);
+        font-size: 10px;
+      }
+
+      .runtime-node strong {
+        display: block;
+        margin-bottom: 7px;
+        font-family: var(--display);
+        font-size: 18px;
+        font-weight: 400;
+        line-height: 1.08;
+      }
+
+      .runtime-node small {
+        color: var(--muted);
+        font-size: 9px;
+        line-height: 1.5;
+      }
+
+      .runtime-boundary {
+        margin-top: auto;
+        padding-top: 14px;
+        color: var(--sage);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 8px;
+      }
+
+      .runtime-node.is-agent .runtime-boundary {
+        color: var(--rust);
+      }
+
+      .runtime-wire {
+        position: relative;
+        align-self: center;
+        height: 1px;
+        background: var(--line-strong);
+      }
+
+      .runtime-wire::after {
+        content: "";
+        position: absolute;
+        top: -3px;
+        left: -1px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--rust);
+        opacity: 0;
+      }
+
+      .runtime-wire.is-active::after {
+        animation: runtime-signal 600ms ease-in-out forwards;
+      }
+
+      .runtime-status {
+        display: grid;
+        grid-template-columns: 150px 1fr auto;
+        gap: 18px;
+        align-items: center;
+        min-height: 58px;
+        padding-top: 20px;
+        border-top: 1px solid var(--line);
+      }
+
+      .runtime-status-label {
+        color: var(--rust);
+        font-family: var(--hand);
+        font-size: 11px;
+      }
+
+      .runtime-status-copy {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.55;
+      }
+
+      .runtime-status-copy strong {
+        color: var(--ink);
+        font-weight: 500;
+      }
+
+      .runtime-counter {
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 9px;
+      }
+
+      @keyframes runtime-signal {
+        0% {
+          left: -1px;
+          opacity: 0;
+          transform: scale(0.7);
+        }
+        16%,
+        78% {
+          opacity: 1;
+        }
+        100% {
+          left: calc(100% - 6px);
+          opacity: 0;
+          transform: scale(1);
+        }
+      }
+
       .map {
         position: relative;
         padding: 28px;
@@ -1067,6 +1315,95 @@
         font-family: var(--hand);
       }
 
+      .hero > div:first-child {
+        animation: hero-enter 700ms cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+
+      .hero-sketch {
+        animation: hero-enter 760ms 120ms cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+
+      .sketch-line path:first-child {
+        stroke-dasharray: 430;
+        stroke-dashoffset: 430;
+        animation: sketch-draw 1.25s 520ms ease-out forwards;
+      }
+
+      .sketch-line path:nth-child(2) {
+        stroke-dasharray: 430;
+        stroke-dashoffset: 430;
+        animation: sketch-draw 1.15s 660ms ease-out forwards;
+      }
+
+      .sketch-line path:last-child {
+        opacity: 0;
+        animation: arrow-arrive 280ms 1.68s ease-out forwards;
+      }
+
+      .sketch-gate {
+        animation: gate-arrive 460ms 1.05s cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+
+      .reveal-target {
+        opacity: 0;
+        transform: translateY(20px);
+        transition:
+          opacity 620ms ease,
+          transform 620ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      .reveal-target.is-visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .timeline-row.reveal-target {
+        transform: translateX(-14px);
+      }
+
+      .timeline-row.reveal-target.is-visible {
+        transform: translateX(0);
+      }
+
+      @keyframes hero-enter {
+        from {
+          opacity: 0;
+          transform: translateY(18px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes sketch-draw {
+        to {
+          stroke-dashoffset: 0;
+        }
+      }
+
+      @keyframes arrow-arrive {
+        from {
+          opacity: 0;
+          transform: translateX(-7px);
+        }
+        to {
+          opacity: 1;
+          transform: translateX(0);
+        }
+      }
+
+      @keyframes gate-arrive {
+        from {
+          opacity: 0;
+          transform: rotate(-4deg) scale(0.78);
+        }
+        to {
+          opacity: 1;
+          transform: rotate(-4deg) scale(1);
+        }
+      }
+
       @media (max-width: 920px) {
         .hero {
           grid-template-columns: 1fr;
@@ -1087,6 +1424,34 @@
 
         .section-copy {
           margin-left: 0;
+        }
+
+        .runtime-route {
+          grid-template-columns: 1fr;
+          padding: 30px 0 22px;
+        }
+
+        .runtime-node {
+          min-height: 0;
+        }
+
+        .runtime-wire {
+          width: 1px;
+          height: 34px;
+          justify-self: center;
+        }
+
+        .runtime-wire::after {
+          top: -1px;
+          left: -3px;
+        }
+
+        .runtime-wire.is-active::after {
+          animation-name: runtime-signal-vertical;
+        }
+
+        .runtime-status {
+          grid-template-columns: 130px 1fr auto;
         }
 
         .lanes {
@@ -1179,6 +1544,28 @@
           padding: 19px;
         }
 
+        .runtime-stage {
+          padding: 20px;
+        }
+
+        .runtime-toolbar {
+          flex-direction: column;
+        }
+
+        .runtime-controls {
+          justify-content: flex-start;
+        }
+
+        .runtime-status {
+          grid-template-columns: 1fr auto;
+          gap: 7px 14px;
+        }
+
+        .runtime-status-copy {
+          grid-column: 1 / -1;
+          grid-row: 2;
+        }
+
         .map-top {
           align-items: flex-start;
           flex-direction: column;
@@ -1263,6 +1650,37 @@
         html {
           scroll-behavior: auto;
         }
+
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+
+        .reveal-target {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      @keyframes runtime-signal-vertical {
+        0% {
+          top: -1px;
+          opacity: 0;
+          transform: scale(0.7);
+        }
+        16%,
+        78% {
+          opacity: 1;
+        }
+        100% {
+          top: calc(100% - 6px);
+          opacity: 0;
+          transform: scale(1);
+        }
       }
     </style>
   </head>
@@ -1290,9 +1708,9 @@
           <span>engineering workflows</span>
         </a>
         <div class="nav-meta">
+          <a href="#runtime">运行机制</a>
           <a href="#map">触发关系</a>
           <a href="#example">实际流程</a>
-          <a href="#parallel">并行规则</a>
           <a class="live" href="#agents">2 agents · active</a>
         </div>
       </div>
@@ -1361,10 +1779,139 @@
         </div>
       </header>
 
+      <section class="section" id="runtime">
+        <div class="shell">
+          <div class="section-head">
+            <div class="section-kicker">01 · Agent-compose runtime</div>
+            <div>
+              <h2 class="section-title">
+                Agent 负责判断，<br />可信代码负责写入。
+              </h2>
+              <p class="section-copy">
+                agent-compose 把事件订阅、可信工具与无凭据 Agent
+                编排成一次可验证的运行。选择一条
+                workflow，查看事件如何穿过六个阶段。
+              </p>
+            </div>
+          </div>
+
+          <div class="runtime-stage" data-runtime>
+            <div class="runtime-toolbar">
+              <div class="runtime-meta" aria-label="agent-compose 配置摘要">
+                <code>scheduler.on(topic)</code>
+                <code>sandbox_policy: new</code>
+                <code>concurrency_policy: parallel</code>
+              </div>
+              <div class="runtime-controls" aria-label="选择演示流程">
+                <button
+                  class="runtime-button"
+                  type="button"
+                  data-runtime-mode="triage"
+                  aria-pressed="true"
+                >
+                  Issue Triage
+                </button>
+                <button
+                  class="runtime-button"
+                  type="button"
+                  data-runtime-mode="draft"
+                  aria-pressed="false"
+                >
+                  Draft PR
+                </button>
+                <button
+                  class="runtime-button replay"
+                  type="button"
+                  data-runtime-replay
+                >
+                  ↻ 重播
+                </button>
+              </div>
+            </div>
+
+            <div
+              class="runtime-route"
+              role="img"
+              aria-label="事件经过 GitHub、QuickJS Scheduler、可信准备工具、无凭据 Agent、可信验证工具，再写回 GitHub"
+            >
+              <div class="runtime-node" data-runtime-node="0">
+                <span class="runtime-node-num">01 · event</span>
+                <strong>GitHub Webhook</strong>
+                <small data-runtime-detail></small>
+                <span class="runtime-boundary">provider input</span>
+              </div>
+              <span
+                class="runtime-wire"
+                data-runtime-wire="0"
+                aria-hidden="true"
+              ></span>
+              <div class="runtime-node" data-runtime-node="1">
+                <span class="runtime-node-num">02 · route</span>
+                <strong>QuickJS Scheduler</strong>
+                <small data-runtime-detail></small>
+                <span class="runtime-boundary">thin event filter</span>
+              </div>
+              <span
+                class="runtime-wire"
+                data-runtime-wire="1"
+                aria-hidden="true"
+              ></span>
+              <div class="runtime-node is-trusted" data-runtime-node="2">
+                <span class="runtime-node-num">03 · prepare</span>
+                <strong>Trusted shell</strong>
+                <small data-runtime-detail></small>
+                <span class="runtime-boundary">credentials available</span>
+              </div>
+              <span
+                class="runtime-wire"
+                data-runtime-wire="2"
+                aria-hidden="true"
+              ></span>
+              <div class="runtime-node is-agent" data-runtime-node="3">
+                <span class="runtime-node-num">04 · reason</span>
+                <strong>Agent sandbox</strong>
+                <small data-runtime-detail></small>
+                <span class="runtime-boundary">no GitHub token</span>
+              </div>
+              <span
+                class="runtime-wire"
+                data-runtime-wire="3"
+                aria-hidden="true"
+              ></span>
+              <div class="runtime-node is-trusted" data-runtime-node="4">
+                <span class="runtime-node-num">05 · validate</span>
+                <strong>Trusted shell</strong>
+                <small data-runtime-detail></small>
+                <span class="runtime-boundary">policy + stale checks</span>
+              </div>
+              <span
+                class="runtime-wire"
+                data-runtime-wire="4"
+                aria-hidden="true"
+              ></span>
+              <div class="runtime-node" data-runtime-node="5">
+                <span class="runtime-node-num">06 · output</span>
+                <strong>GitHub Write</strong>
+                <small data-runtime-detail></small>
+                <span class="runtime-boundary">managed result only</span>
+              </div>
+            </div>
+
+            <div class="runtime-status" aria-live="polite">
+              <span class="runtime-status-label" data-runtime-label
+                >event received</span
+              >
+              <span class="runtime-status-copy" data-runtime-status></span>
+              <span class="runtime-counter" data-runtime-counter>01 / 06</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="section" id="map">
         <div class="shell">
           <div class="section-head">
-            <div class="section-kicker">01 · Trigger map</div>
+            <div class="section-kicker">02 · Trigger map</div>
             <div>
               <h2 class="section-title">
                 同一条事件总线，<br />两条独立的工作流。
@@ -1489,7 +2036,7 @@
       <section class="section" id="parallel">
         <div class="shell">
           <div class="section-head">
-            <div class="section-kicker">02 · Concurrency</div>
+            <div class="section-kicker">03 · Concurrency</div>
             <div>
               <h2 class="section-title">整体并行，<br />同一目标串行。</h2>
               <p class="section-copy">
@@ -1610,7 +2157,7 @@
       <section class="section" id="example">
         <div class="shell">
           <div class="section-head">
-            <div class="section-kicker">03 · A real run</div>
+            <div class="section-kicker">04 · A real run</div>
             <div>
               <h2 class="section-title">
                 从一个 Issue，<br />走到可评审的 Draft PR。
@@ -1802,7 +2349,7 @@
       <section class="section">
         <div class="shell">
           <div class="section-head">
-            <div class="section-kicker">04 · Boundaries</div>
+            <div class="section-kicker">05 · Boundaries</div>
             <div>
               <h2 class="section-title">
                 Agent 负责理解和修改，<br />代码负责信任与写入。
@@ -1863,5 +2410,180 @@
         <span>2 agents · explicit triggers · deterministic writes</span>
       </div>
     </footer>
+    <script>
+      (() => {
+        const runtime = document.querySelector("[data-runtime]");
+        if (!runtime) return;
+
+        const reducedMotion = window.matchMedia(
+          "(prefers-reduced-motion: reduce)",
+        ).matches;
+        const modes = {
+          triage: {
+            details: [
+              "issues.opened 进入 webhook.github.issues topic。",
+              "scheduler.on 过滤 action、PR payload 与控制标签。",
+              "scheduler.shell 重新读取 Issue、评论与候选项，并生成 fingerprint。",
+              "scheduler.agent 只做分类、事实提取与重复项判断，返回结构化 JSON。",
+              "可信工具校验 schema、fingerprint 与 policy，拒绝 stale 结果。",
+              "只更新受管 labels 与一条受管评论，保留用户内容。",
+            ],
+            labels: [
+              "event received",
+              "topic matched",
+              "context prepared",
+              "agent reasoning",
+              "result validated",
+              "managed write",
+            ],
+            statuses: [
+              "GitHub 事件由 agent-compose Webhook API 验签后发布到配置 topic。",
+              "QuickJS 只负责轻量解析和编排；不在这里执行 Node provider 逻辑。",
+              "嵌入 Scheduler artifact 的 Node 工具在全新 shell sandbox 中恢复并运行。",
+              "所有 GitHub 凭据被显式清空；AI 输出只是待验证的 advisory input。",
+              "写入前重新拉取 provider 状态，确定性代码计算 priority 与受管变更。",
+              "结果回到 GitHub；标题、正文和 human-owned labels 始终不被改写。",
+            ],
+          },
+          draft: {
+            details: [
+              "agent:ready label 进入 webhook.github.issues topic。",
+              "Scheduler 只接受 ready / approved，并绑定 allowlisted repository。",
+              "可信工具加锁、refetch、clone，并准备隔离 workspace。",
+              "scheduler.agent 在挂载的 checkout 中改代码和测试，但不 commit / push。",
+              "外层重跑 gates，检查 diff、secret、risk、base SHA 与当前状态。",
+              "可信工具 commit、non-force push，并创建 Draft PR 与状态标签。",
+            ],
+            labels: [
+              "human authorization",
+              "trigger accepted",
+              "workspace prepared",
+              "agent implementation",
+              "diff validated",
+              "draft PR opened",
+            ],
+            statuses: [
+              "维护者添加 agent:ready；Triage 不会自动产生这个授权信号。",
+              "agent-compose 为这次运行创建新的 Scheduler sandbox，并允许不同目标并行。",
+              "可信 Node 工具持有 provider 边界和 per-Issue lock；Agent 只得到工作目录。",
+              "Agent 修改与测试隔离 checkout，GitHub token、App key 与写权限全部为空。",
+              "只有通过 policy gates 的当前 diff 才能进入 apply；过期 head 会被拒绝。",
+              "Workflow 只开 Draft PR；不会 force-push、mark ready、merge 或关闭 Issue。",
+            ],
+          },
+        };
+
+        const nodes = [...runtime.querySelectorAll("[data-runtime-node]")];
+        const wires = [...runtime.querySelectorAll("[data-runtime-wire]")];
+        const details = [...runtime.querySelectorAll("[data-runtime-detail]")];
+        const status = runtime.querySelector("[data-runtime-status]");
+        const label = runtime.querySelector("[data-runtime-label]");
+        const counter = runtime.querySelector("[data-runtime-counter]");
+        const modeButtons = [
+          ...runtime.querySelectorAll("[data-runtime-mode]"),
+        ];
+        const replayButton = runtime.querySelector("[data-runtime-replay]");
+        let activeMode = "triage";
+        let timers = [];
+        let hasAutoPlayed = false;
+
+        function clearTimers() {
+          timers.forEach((timer) => window.clearTimeout(timer));
+          timers = [];
+          wires.forEach((wire) => wire.classList.remove("is-active"));
+        }
+
+        function renderStep(step) {
+          const config = modes[activeMode];
+          nodes.forEach((node, index) => {
+            node.classList.toggle("is-active", index === step);
+            node.classList.toggle("is-complete", index < step);
+          });
+          details.forEach((detail, index) => {
+            detail.textContent = config.details[index];
+          });
+          label.textContent = config.labels[step];
+          status.innerHTML = `<strong>${config.details[step]}</strong> ${config.statuses[step]}`;
+          counter.textContent = `${String(step + 1).padStart(2, "0")} / 06`;
+          runtime.style.setProperty("--glow-x", `${8 + step * 17}%`);
+        }
+
+        function runFrom(step) {
+          renderStep(step);
+          if (step >= nodes.length - 1 || reducedMotion) return;
+          const pause = window.setTimeout(() => {
+            const wire = wires[step];
+            wire.classList.remove("is-active");
+            void wire.offsetWidth;
+            wire.classList.add("is-active");
+            const advance = window.setTimeout(() => runFrom(step + 1), 610);
+            timers.push(advance);
+          }, 820);
+          timers.push(pause);
+        }
+
+        function play() {
+          clearTimers();
+          runFrom(reducedMotion ? nodes.length - 1 : 0);
+        }
+
+        function setMode(mode) {
+          activeMode = mode;
+          modeButtons.forEach((button) => {
+            button.setAttribute(
+              "aria-pressed",
+              String(button.dataset.runtimeMode === mode),
+            );
+          });
+          play();
+        }
+
+        modeButtons.forEach((button) => {
+          button.addEventListener("click", () =>
+            setMode(button.dataset.runtimeMode),
+          );
+        });
+        replayButton.addEventListener("click", play);
+        renderStep(0);
+
+        const revealTargets = document.querySelectorAll(
+          ".section-head, .map, .concurrency-card, .state-card, .example-surface, .timeline-row, .safety-strip, .closing .shell",
+        );
+        revealTargets.forEach((target) =>
+          target.classList.add("reveal-target"),
+        );
+
+        if (reducedMotion || !("IntersectionObserver" in window)) {
+          revealTargets.forEach((target) => target.classList.add("is-visible"));
+          play();
+          return;
+        }
+
+        const revealObserver = new IntersectionObserver(
+          (entries, observer) => {
+            entries.forEach((entry) => {
+              if (!entry.isIntersecting) return;
+              entry.target.classList.add("is-visible");
+              observer.unobserve(entry.target);
+            });
+          },
+          { threshold: 0.12, rootMargin: "0px 0px -7%" },
+        );
+        revealTargets.forEach((target) => revealObserver.observe(target));
+
+        const runtimeObserver = new IntersectionObserver(
+          (entries, observer) => {
+            if (!entries.some((entry) => entry.isIntersecting)) return;
+            if (!hasAutoPlayed) {
+              hasAutoPlayed = true;
+              play();
+            }
+            observer.disconnect();
+          },
+          { threshold: 0.35 },
+        );
+        runtimeObserver.observe(runtime);
+      })();
+    </script>
   </body>
 </html>
