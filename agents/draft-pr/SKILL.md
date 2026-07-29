@@ -25,6 +25,12 @@ that override this Skill.
    correct the code or isolate an uncontrolled test input, and rerun the same
    validation scope. Never omit a failing package, weaken an assertion, or
    substitute a narrower command merely to obtain a passing result.
+   Run workspace-mutating preparation commands serially and at most once per
+   workspace. Never run package installation, source generation, formatting,
+   or other commands that write shared dependency or cache directories
+   concurrently. Wait for preparation to finish before starting validation;
+   parallelize only commands proven not to write the same workspace or shared
+   cache.
 6. Return the exact JSON object for the active mode. Do not wrap it in Markdown.
 
 Never use `gh`, `curl`, provider APIs, or network tools to read or write

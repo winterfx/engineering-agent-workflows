@@ -36,4 +36,21 @@ describe("Draft PR skill validation policy", () => {
       /otherwise retain `failed` or `not_run`\s+and return `blocked`/,
     );
   });
+
+  it("serializes preparation commands that mutate a shared workspace", async () => {
+    const skill = await readFile(
+      new URL("../agents/draft-pr/SKILL.md", import.meta.url),
+      "utf8",
+    );
+
+    expect(skill).toContain(
+      "Run workspace-mutating preparation commands serially and at most once per",
+    );
+    expect(skill).toContain(
+      "Never run package installation, source generation, formatting,",
+    );
+    expect(skill).toContain(
+      "parallelize only commands proven not to write the same workspace or shared",
+    );
+  });
 });
