@@ -81,6 +81,70 @@ function prepareAgentWorkspace(workspacePath) {
   }
 }
 
+const REQUIRED_VALIDATION_GATE_COMMANDS = {
+  "task-prepare": "task prepare",
+  "task-lint": "task lint",
+  "task-test-unit": "task test:unit",
+};
+
+function requiredValidationCommands() {
+  let policy;
+  try {
+    policy = JSON.parse(WORKFLOW_POLICY_JSON);
+  } catch {
+    throw new Error("Draft PR policy is not valid JSON");
+  }
+  const gates = policy?.requiredValidationGates;
+  if (!Array.isArray(gates) || gates.length === 0) {
+    throw new Error("Draft PR policy requires validation gates");
+  }
+  return gates.map((gate) => {
+    const command = REQUIRED_VALIDATION_GATE_COMMANDS[gate];
+    if (!command) {
+      throw new Error("unsupported Draft PR validation gate: " + gate);
+    }
+    return command;
+  });
+}
+
+function validateAgentWorkspace(workspacePath) {
+  const volume = agentWorkspaceVolume(workspacePath);
+  const commands = requiredValidationCommands();
+  const result = scheduler.shell(
+    [
+      "set -u",
+      'cd "$DRAFT_PR_WORKSPACE_PATH"',
+      "validation_status=0",
+      ...commands.map((command) => command + " || validation_status=$?"),
+      'exit "$validation_status"',
+    ].join("\n"),
+    {
+      sandboxPolicy: "new",
+      env: {
+        DRAFT_PR_WORKSPACE_VALIDATE: "1",
+        DRAFT_PR_WORKSPACE_PATH: workspacePath,
+        DRAFT_PR_APPLY: "0",
+        CI: "1",
+        GITHUB_TOKEN: "",
+        GH_TOKEN: "",
+        GITHUB_APP_CLIENT_ID: "",
+        GITHUB_APP_ID: "",
+        GITHUB_APP_INSTALLATION_ID: "",
+        GITHUB_APP_PRIVATE_KEY_BASE64: "",
+        DRAFT_PR_GIT_TOKEN: "",
+      },
+      volumes: [volume],
+      maxOutputBytes: 8 * 1024 * 1024,
+    },
+  );
+  if (!result.success) {
+    const output = String(result.stdout || result.output || "").trim();
+    throw new Error(
+      "Draft PR required validation failed: " + output.slice(-4000),
+    );
+  }
+}
+
 function runDeterministicTool(script, env, label) {
   const result = scheduler.shell(
     [
@@ -490,6 +554,18 @@ function runReviewFix(repository, pullRequestNumber, reviewId) {
   } catch (error) {
     return recordReviewFailure(repository, pullRequestNumber, prepared, error);
   }
+  if (analysis.outcome === "fixed") {
+    try {
+      validateAgentWorkspace(prepared.workspacePath);
+    } catch (error) {
+      return recordReviewFailure(
+        repository,
+        pullRequestNumber,
+        prepared,
+        error,
+      );
+    }
+  }
   try {
     return runReviewTool("apply-review", repository, pullRequestNumber, {
       submission: {
@@ -579,6 +655,13 @@ function runCiFix(repository, pullRequestNumber, headSha, checkSuiteId) {
     analysis = parseAgentJson(reply);
   } catch (error) {
     return recordCiFailure(repository, pullRequestNumber, prepared, error);
+  }
+  if (analysis.outcome === "fixed") {
+    try {
+      validateAgentWorkspace(prepared.workspacePath);
+    } catch (error) {
+      return recordCiFailure(repository, pullRequestNumber, prepared, error);
+    }
   }
   try {
     return runCiTool("apply-ci", repository, pullRequestNumber, {
@@ -708,6 +791,14 @@ function handleGitHubIssue(event) {
       issueNumber,
       "Draft PR Agent returned invalid JSON",
     );
+  }
+
+  if (analysis.outcome === "implemented") {
+    try {
+      validateAgentWorkspace(prepared.workspacePath);
+    } catch (error) {
+      return recordFailure(repository, issueNumber, error);
+    }
   }
 
   try {

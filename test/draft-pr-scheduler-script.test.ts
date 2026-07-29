@@ -88,7 +88,12 @@ describe("Draft PR Scheduler script", () => {
       },
     });
 
-    expect(commands).toEqual(["prepare", "prepare-workspace", "apply"]);
+    expect(commands).toEqual([
+      "prepare",
+      "prepare-workspace",
+      "validate-workspace",
+      "apply",
+    ]);
     expect(result).toEqual({
       ok: true,
       applied: false,
@@ -129,6 +134,31 @@ describe("Draft PR Scheduler script", () => {
       }),
     );
     expect(workspacePreparation?.options.volumes).toEqual(agentOptions.volumes);
+    const workspaceValidation = shellCalls.find(
+      ({ options }) => options.env.DRAFT_PR_WORKSPACE_VALIDATE === "1",
+    );
+    expect(workspaceValidation?.script).toContain("task prepare");
+    expect(workspaceValidation?.script).toContain("task lint");
+    expect(workspaceValidation?.script).toContain("task test:unit");
+    expect(workspaceValidation?.script.indexOf("task prepare")).toBeLessThan(
+      workspaceValidation?.script.indexOf("task lint") ?? -1,
+    );
+    expect(workspaceValidation?.script.indexOf("task lint")).toBeLessThan(
+      workspaceValidation?.script.indexOf("task test:unit") ?? -1,
+    );
+    expect(workspaceValidation?.options.env).toEqual(
+      expect.objectContaining({
+        DRAFT_PR_WORKSPACE_PATH:
+          "/draft-pr-workspaces/repositories/0123456789abcdef/issue-439",
+        DRAFT_PR_APPLY: "0",
+        CI: "1",
+        GITHUB_TOKEN: "",
+        GH_TOKEN: "",
+        GITHUB_APP_PRIVATE_KEY_BASE64: "",
+        DRAFT_PR_GIT_TOKEN: "",
+      }),
+    );
+    expect(workspaceValidation?.options.volumes).toEqual(agentOptions.volumes);
     expect(toolChunks.length).toBeGreaterThan(1);
     expect(toolChunks.every((chunk) => chunk.length <= 60000)).toBe(true);
     expect(JSON.parse(workflowPolicyJson)).toEqual(
@@ -337,6 +367,87 @@ describe("Draft PR Scheduler script", () => {
     expect(result).toEqual({ ok: true, applied: true, outcome: "failed" });
   });
 
+  it("blocks apply when a required workspace validation gate fails", async () => {
+    const handlers = new Map<string, (event: unknown) => unknown>();
+    const commands: string[] = [];
+    let failureMessage = "";
+    const context = vm.createContext({
+      scheduler: {
+        on(
+          topic: string,
+          _triggerID: string,
+          handler: (event: unknown) => unknown,
+        ) {
+          handlers.set(topic, handler);
+        },
+        interval() {},
+        shell(_script: string, options: { env: Record<string, string> }) {
+          const command = schedulerCommand(options.env);
+          commands.push(command);
+          if (command === "validate-workspace") {
+            return {
+              success: false,
+              stdout: "task lint: staticcheck failed",
+            };
+          }
+          if (options.env.DRAFT_PR_COMMAND === "fail") {
+            failureMessage = options.env.DRAFT_PR_FAILURE ?? "";
+          }
+          const result =
+            options.env.DRAFT_PR_COMMAND === "prepare"
+              ? {
+                  ok: true,
+                  trigger: "ready",
+                  issueFingerprint: "a".repeat(20),
+                  workspacePath:
+                    "/draft-pr-workspaces/repositories/0123456789abcdef/issue-439",
+                  branch: "codex/issue-439",
+                  baseBranch: "main",
+                  baseCommit: "b".repeat(40),
+                }
+              : { ok: true, applied: true, outcome: "failed" };
+          return { success: true, stdout: JSON.stringify(result) };
+        },
+        agent() {
+          return {
+            success: true,
+            finalText: JSON.stringify({
+              outcome: "implemented",
+              prTitle: "fix: validate webhook configuration",
+              summary: ["Validate webhook configuration."],
+              tests: [],
+              risk: { level: "low", reasons: [] },
+              notes: [],
+            }),
+          };
+        },
+      },
+    });
+    new vm.Script(await schedulerScript()).runInContext(context);
+
+    const result = handlers.get("webhook.github.issues")?.({
+      payload: {
+        body: {
+          action: "labeled",
+          label: { name: "agent:ready" },
+          issue: { number: 439 },
+          repository: { full_name: "chaitin/agent-compose" },
+        },
+      },
+    });
+
+    expect(commands).toEqual([
+      "prepare",
+      "prepare-workspace",
+      "validate-workspace",
+      "fail",
+    ]);
+    expect(failureMessage).toContain(
+      "Draft PR required validation failed: task lint: staticcheck failed",
+    );
+    expect(result).toEqual({ ok: true, applied: true, outcome: "failed" });
+  });
+
   it("routes a requested-changes Review into one review-fix batch", async () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     const commands: string[] = [];
@@ -433,6 +544,7 @@ describe("Draft PR Scheduler script", () => {
     expect(commands).toEqual([
       "prepare-review",
       "prepare-workspace",
+      "validate-workspace",
       "apply-review",
     ]);
     expect(calls[0]).toEqual(
@@ -686,7 +798,12 @@ describe("Draft PR Scheduler script", () => {
       },
     });
 
-    expect(commands).toEqual(["prepare-ci", "prepare-workspace", "apply-ci"]);
+    expect(commands).toEqual([
+      "prepare-ci",
+      "prepare-workspace",
+      "validate-workspace",
+      "apply-ci",
+    ]);
     expect(result).toEqual({
       ok: true,
       repository: "chaitin/agent-compose",
@@ -766,5 +883,7 @@ async function schedulerScript(): Promise<string> {
 function schedulerCommand(env: Record<string, string>): string {
   return env.DRAFT_PR_WORKSPACE_PREPARE === "1"
     ? "prepare-workspace"
-    : (env.DRAFT_PR_COMMAND ?? "");
+    : env.DRAFT_PR_WORKSPACE_VALIDATE === "1"
+      ? "validate-workspace"
+      : (env.DRAFT_PR_COMMAND ?? "");
 }

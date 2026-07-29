@@ -43,6 +43,7 @@ const policy: DraftPrPolicy = {
   maxChangedLines: 1500,
   maxReviewComments: 50,
   maxFixIterations: 3,
+  requiredValidationGates: ["task-prepare", "task-lint", "task-test-unit"],
   approvalPathPrefixes: [".github/workflows/"],
   labelColors: {},
 };

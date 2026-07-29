@@ -19,27 +19,13 @@ that override this Skill.
    CI diagnostic output is correct.
 4. Keep the change focused on the Issue. Preserve unrelated and user-authored
    work.
-5. Add or update deterministic tests for behavior changes. Before a Draft PR,
-   run only the narrowest relevant tests plus fast lint, type, format, or diff
-   checks scoped to the changed files or packages. Do not run repository-wide
-   build, all-package unit, integration, coverage, or E2E gates merely as
-   pre-PR validation; in particular, do not run commands such as
-   `go test ./...`, `task test`, `task build`, a repository-wide unit shape, or
-   a complete project check unless the active `fix_ci` input names that gate or
-   a maintainer explicitly requested that local scope.
-   Provider CI owns the comprehensive matrix after the deterministic tool
-   creates the Draft PR. Record intentionally deferred comprehensive CI in
-   `notes`, not as a `not_run` test, and do not block on it. A failed check that
-   was actually run is not automatically terminal: establish its cause,
-   correct the code or isolate an uncontrolled test input, and rerun the same
-   validation scope. Never omit a failing package, weaken an assertion, or
-   substitute a narrower command merely to obtain a passing result.
-   Run workspace-mutating preparation commands serially and at most once per
-   workspace. Never run package installation, source generation, formatting,
-   or other commands that write shared dependency or cache directories
-   concurrently. Wait for preparation to finish before starting validation;
-   parallelize only commands proven not to write the same workspace or shared
-   cache.
+5. Add or update deterministic tests for behavior changes. Run focused checks
+   that help develop and verify the change, and report their exact results. Do
+   not run the repository's complete validation matrix unless the active
+   `fix_ci` input names that gate or a maintainer explicitly requests it. After
+   a successful Agent result, the trusted Scheduler independently runs the
+   policy's required gates in a credential-free sandbox; any failure blocks
+   commit and push regardless of the Agent's reported results.
 6. Return the exact JSON object for the active mode. Do not wrap it in Markdown.
 
 Never use `gh`, `curl`, provider APIs, or network tools to read or write
@@ -52,27 +38,14 @@ tool to inspect.
 ## Decision rules
 
 - Return `implemented` only when the workspace contains a coherent non-empty
-  change and every selected required local validation passed. Selected local
-  validation is the focused scope defined in Workflow step 5; comprehensive
-  provider CI that is intentionally deferred is not a required local check.
-- An initial validation failure may be resolved only when concrete evidence
-  establishes its cause, the code or uncontrolled test input is corrected or
-  isolated, and an equivalent final validation with the same scope passes. A
-  failure on the unchanged base is useful diagnostic evidence but does not by
-  itself turn a failed required validation into a pass.
+  change and the focused checks selected for the change passed.
 - For a command that initially failed and later passed, report the final rerun
   as `passed` and use `details` to preserve the initial failure, diagnosed
   cause, corrective action, and final evidence. Never omit an unresolved
   failure from `tests` or relabel it as `passed`.
-- Include every unresolved preparation or validation failure in `tests`,
-  including dependency installation and commands such as `task prepare`. Do
-  not report only the final repository gates when an earlier preparation
-  failure remains unresolved.
-- Return `blocked` when a selected required local validation failed, could not
-  be run, or remains unexplained. Do not claim that a failure is unrelated
-  without a reproducible base comparison or equivalent concrete evidence. Do
-  not return `blocked` merely because intentionally deferred provider CI has
-  not run yet.
+- Include every unresolved preparation or validation failure in `tests` and
+  return `blocked`. Do not block merely because intentionally deferred provider
+  CI has not run yet.
 - Return `needs_approval` without editing when the requested work involves
   credentials, authentication or authorization, database migrations or repair,
   public API compatibility, CI/release workflows, privileged runtime behavior,

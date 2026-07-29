@@ -1,5 +1,6 @@
 import {
   array,
+  enum as enumType,
   number,
   object,
   record,
@@ -23,6 +24,9 @@ export const draftPrPolicySchema = object({
   maxChangedLines: number().int().positive().max(100_000),
   maxReviewComments: number().int().positive().max(100),
   maxFixIterations: number().int().positive().max(20),
+  requiredValidationGates: array(
+    enumType(["task-prepare", "task-lint", "task-test-unit"]),
+  ).min(1),
   approvalPathPrefixes: array(string().min(1)),
   labelColors: record(string(), string().regex(/^[0-9a-fA-F]{6}$/)),
 });
