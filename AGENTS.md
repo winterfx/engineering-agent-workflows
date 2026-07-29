@@ -4,7 +4,8 @@ This repository owns versioned AI engineering workflows. Keep event ingestion th
 
 - `agents/` contains agent instructions, prompts, schemas, and policy configuration.
 - `src/` contains deterministic orchestration and boundary adapters.
-- `loaders/` contains minimal agent-compose Scheduler trigger scripts.
+- `src/schedulers/` contains minimal agent-compose Scheduler trigger sources.
+- `agents/*/scheduler.js` contains generated self-contained deployment artifacts.
 - `test/` covers observable workflow behavior without public network or model calls.
 
 AI output is advisory input. Validate it before performing Git provider writes. Preserve user-authored content and labels unless a documented managed namespace explicitly permits replacement. Never commit credentials or log tokens, webhook secrets, authorization headers, or unfiltered environment values.

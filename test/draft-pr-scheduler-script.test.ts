@@ -7,6 +7,8 @@ describe("Draft PR Scheduler script", () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     const commands: string[] = [];
     let agentOptions: Record<string, unknown> = {};
+    let toolChunks: string[] = [];
+    let workflowPolicyJson = "";
     const context = vm.createContext({
       scheduler: {
         on(
@@ -19,6 +21,11 @@ describe("Draft PR Scheduler script", () => {
         interval() {},
         shell(_script: string, options: { env: Record<string, string> }) {
           commands.push(options.env.DRAFT_PR_COMMAND ?? "");
+          workflowPolicyJson = options.env.WORKFLOW_POLICY_JSON ?? "";
+          toolChunks = Object.entries(options.env)
+            .filter(([name]) => name.startsWith("WORKFLOW_TOOL_CHUNK_"))
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([, value]) => value);
           const result =
             options.env.DRAFT_PR_COMMAND === "prepare"
               ? {
@@ -88,6 +95,11 @@ describe("Draft PR Scheduler script", () => {
         readOnly: false,
       }),
     ]);
+    expect(toolChunks.length).toBeGreaterThan(1);
+    expect(toolChunks.every((chunk) => chunk.length <= 60000)).toBe(true);
+    expect(JSON.parse(workflowPolicyJson)).toEqual(
+      expect.objectContaining({ version: 1 }),
+    );
   });
 
   it("ignores unrelated labels without invoking a sandbox", async () => {
@@ -636,5 +648,8 @@ describe("Draft PR Scheduler script", () => {
 });
 
 async function schedulerScript(): Promise<string> {
-  return readFile(new URL("../loaders/draft-pr.js", import.meta.url), "utf8");
+  return readFile(
+    new URL("../agents/draft-pr/scheduler.js", import.meta.url),
+    "utf8",
+  );
 }

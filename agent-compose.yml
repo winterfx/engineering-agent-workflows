@@ -25,16 +25,20 @@ agents:
 
     skills:
       - name: issue-triage
-        provider: file
-        path: ./agents/issue-triage
+        provider: git
+        url: https://github.com/winterfx/engineering-agent-workflows.git
+        ref: main
+        path: agents/issue-triage
 
     scheduler:
       enabled: true
       sandbox_policy: new
       concurrency_policy: parallel
       script:
-        provider: file
-        path: ./loaders/issue-triage.js
+        provider: git
+        url: https://github.com/winterfx/engineering-agent-workflows.git
+        ref: main
+        path: agents/issue-triage/scheduler.js
 
   draft-pr:
     enabled: true
@@ -57,13 +61,17 @@ agents:
 
     skills:
       - name: draft-pr
-        provider: file
-        path: ./agents/draft-pr
+        provider: git
+        url: https://github.com/winterfx/engineering-agent-workflows.git
+        ref: main
+        path: agents/draft-pr
 
     scheduler:
       enabled: true
       sandbox_policy: new
       concurrency_policy: parallel
       script:
-        provider: file
-        path: ./loaders/draft-pr.js
+        provider: git
+        url: https://github.com/winterfx/engineering-agent-workflows.git
+        ref: main
+        path: agents/draft-pr/scheduler.js

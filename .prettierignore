@@ -1,2 +1,2 @@
 dist/
-agents/*/scripts/*.mjs
+agents/*/scheduler.js

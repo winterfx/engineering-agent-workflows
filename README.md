@@ -64,7 +64,9 @@ maintainer. There is no recurring reconciliation timer.
 
 ## Trust boundary
 
-- Scheduler loaders only parse events and start deterministic tools.
+- Scheduler source modules only parse events and start deterministic tools.
+- Each generated Scheduler artifact embeds its deterministic Node tool and
+  materializes it only inside a fresh shell sandbox.
 - Provider state is refetched before preparation and before any write.
 - The Agent receives a writable checkout but no GitHub credentials.
 - The Agent leaves changes uncommitted; trusted code inspects, commits, and
@@ -95,17 +97,20 @@ Policies and label metadata live in:
 ## Repository layout
 
 ```text
-agents/       Skills, policy, schemas, and generated tool bundles
-loaders/      Thin agent-compose Scheduler scripts
-src/          Deterministic orchestration and provider/Git boundaries
+agents/       Skills, policy, and generated self-contained Scheduler artifacts
+src/          Scheduler sources plus deterministic provider/Git boundaries
 test/         Network-free observable behavior tests
 examples/     Webhook fixtures
 deploy/       Daemon environment examples
 ```
 
-Do not edit `agents/*/scripts/*.mjs` directly. Change `src/` and run
-`npm run build`. Loader files are snapshotted by `agent-compose config/up`, so
-reload the configuration after changing them.
+Do not edit `agents/*/scheduler.js` directly. Change `src/` and run
+`npm run build`. Each Agent is built into one versioned Scheduler JavaScript
+artifact. The artifact contains the thin event loader and an embedded Node.js
+tool bundle; provider credentials remain available only to the deterministic
+shell process, while Agent sandboxes explicitly clear them. Scheduler files are
+snapshotted by `agent-compose config/up`, so reload the configuration after
+changing them.
 
 ## Setup
 
@@ -156,8 +161,8 @@ Keep apply mode disabled until dry-run output has been reviewed.
 
 ## Verify and run
 
-Generated tool bundles are versioned, so a clean checkout verifies them without
-rewriting them:
+Generated Scheduler artifacts are versioned, so a clean checkout verifies them
+without rewriting them:
 
 ```bash
 npm ci
@@ -165,6 +170,18 @@ npm run check
 agent-compose config --quiet
 agent-compose up
 ```
+
+GitHub Actions runs `npm ci` and `npm run check` for every Pull Request and push
+to `main`. CI verifies that generated Scheduler artifacts match their source;
+it does not regenerate or commit them. Run `npm run build` locally and include
+the updated `agents/*/scheduler.js` files in the Pull Request.
+
+The build and runtime use two different JavaScript environments. Node.js runs
+`scripts/build-tools.ts` and esbuild locally or in CI. The resulting Scheduler
+file is JavaScript source loaded by the agent-compose QuickJS runtime; it is not
+QuickJS bytecode. QuickJS handles event registration and orchestration only.
+The embedded provider/Git tool is restored inside `scheduler.shell(...)` and
+executed there by Node.js 20, so Node-specific modules never run inside QuickJS.
 
 After changing `src/`, run `npm run build` before `npm run check`.
 Behavior changes require deterministic tests without public network or model

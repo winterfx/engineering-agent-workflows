@@ -3,13 +3,28 @@ const GITHUB_REVIEW_TOPIC = "webhook.github.pull_request_review";
 const GITHUB_CHECK_SUITE_TOPIC = "webhook.github.check_suite";
 const READY_LABEL = "agent:ready";
 const APPROVED_LABEL = "agent:approved";
-const TOOL_PATH = "/opt/draft-pr/scripts/draft-pr.mjs";
+const WORKFLOW_TOOL_BASE64 = "__WORKFLOW_TOOL_BASE64__";
+const WORKFLOW_POLICY_JSON = "__WORKFLOW_POLICY_JSON__";
+const WORKFLOW_TOOL_CHUNK_SIZE = 60000;
 const WORKSPACE_VOLUME = {
   type: "bind",
   source: "./.draft-pr-workspaces",
   target: "/draft-pr-workspaces",
   readOnly: false,
 };
+
+function workflowToolEnvironment() {
+  const env = {};
+  for (
+    let offset = 0, index = 0;
+    offset < WORKFLOW_TOOL_BASE64.length;
+    offset += WORKFLOW_TOOL_CHUNK_SIZE, index += 1
+  ) {
+    env[`WORKFLOW_TOOL_CHUNK_${String(index).padStart(4, "0")}`] =
+      WORKFLOW_TOOL_BASE64.slice(offset, offset + WORKFLOW_TOOL_CHUNK_SIZE);
+  }
+  return env;
+}
 
 function agentWorkspaceVolume(workspacePath) {
   const prefix = "/draft-pr-workspaces/repositories/";
@@ -32,20 +47,22 @@ function agentWorkspaceVolume(workspacePath) {
 }
 
 function runDeterministicTool(script, env, label) {
-  const result = scheduler.shell(script, {
-    sandboxPolicy: "new",
-    env,
-    volumes: [
-      {
-        type: "bind",
-        source: "./agents/draft-pr",
-        target: "/opt/draft-pr",
-        readOnly: true,
-      },
-      WORKSPACE_VOLUME,
-    ],
-    maxOutputBytes: 4 * 1024 * 1024,
-  });
+  const result = scheduler.shell(
+    [
+      "set -eu",
+      'workflow_tool_dir="$(mktemp -d)"',
+      'workflow_tool="$workflow_tool_dir/draft-pr.mjs"',
+      'node -e \'const fs=require("node:fs"); const source=Object.keys(process.env).filter((key)=>key.startsWith("WORKFLOW_TOOL_CHUNK_")).sort().map((key)=>process.env[key]).join(""); fs.writeFileSync(process.argv[1], Buffer.from(source, "base64"))\' "$workflow_tool"',
+      'export DRAFT_PR_TOOL="$workflow_tool"',
+      script,
+    ].join("\n"),
+    {
+      sandboxPolicy: "new",
+      env: { ...env, WORKFLOW_POLICY_JSON, ...workflowToolEnvironment() },
+      volumes: [WORKSPACE_VOLUME],
+      maxOutputBytes: 4 * 1024 * 1024,
+    },
+  );
   const output = String(result.stdout || result.output || "").trim();
   if (!result.success) {
     throw new Error(label + " failed: " + output.slice(-4000));
@@ -229,7 +246,6 @@ function runTool(command, repository, issueNumber, options) {
         ? JSON.stringify(options.submission)
         : "",
       DRAFT_PR_FAILURE: String(options?.message || "").slice(0, 2000),
-      DRAFT_PR_TOOL: TOOL_PATH,
       DRAFT_PR_WORKSPACE_ROOT: "/draft-pr-workspaces",
     },
     "Draft PR tool",
@@ -302,7 +318,6 @@ function runReviewTool(command, repository, pullRequestNumber, options) {
       DRAFT_PR_REVIEW_CURSOR: String(options?.reviewCursor || 0),
       DRAFT_PR_REVIEW_ITERATIONS: String(options?.iterations || 0),
       DRAFT_PR_REVIEW_HEAD: String(options?.headSha || "none"),
-      DRAFT_PR_TOOL: TOOL_PATH,
       DRAFT_PR_WORKSPACE_ROOT: "/draft-pr-workspaces",
     },
     "Draft PR review tool",
@@ -336,7 +351,6 @@ function runCiTool(command, repository, pullRequestNumber, options) {
       DRAFT_PR_SUBMISSION: options?.submission
         ? JSON.stringify(options.submission)
         : "",
-      DRAFT_PR_TOOL: TOOL_PATH,
       DRAFT_PR_WORKSPACE_ROOT: "/draft-pr-workspaces",
     },
     "Draft PR CI tool",

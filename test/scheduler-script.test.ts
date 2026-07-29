@@ -7,6 +7,8 @@ describe("GitHub Issue triage scheduler script", () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     let shellScript = "";
     let senderLogin = "";
+    let toolChunks: string[] = [];
+    let workflowPolicyJson = "";
     const context = vm.createContext({
       scheduler: {
         on(
@@ -19,6 +21,11 @@ describe("GitHub Issue triage scheduler script", () => {
         shell(script: string, options: { env: Record<string, string> }) {
           shellScript = script;
           senderLogin = options.env.TRIAGE_SENDER_LOGIN ?? "";
+          workflowPolicyJson = options.env.WORKFLOW_POLICY_JSON ?? "";
+          toolChunks = Object.entries(options.env)
+            .filter(([name]) => name.startsWith("WORKFLOW_TOOL_CHUNK_"))
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([, value]) => value);
           return {
             success: true,
             stdout: JSON.stringify({
@@ -54,6 +61,12 @@ describe("GitHub Issue triage scheduler script", () => {
     });
     expect(senderLogin).toBe("triage-bot");
     expect(shellScript).toContain("GITHUB_BOT_LOGIN");
+    expect(shellScript).toContain('Buffer.from(source, "base64")');
+    expect(toolChunks.length).toBeGreaterThan(1);
+    expect(toolChunks.every((chunk) => chunk.length <= 60000)).toBe(true);
+    expect(JSON.parse(workflowPolicyJson)).toEqual(
+      expect.objectContaining({ version: 1 }),
+    );
   });
 
   it("routes GitHub Issue events and ignores pull requests", async () => {
@@ -178,7 +191,7 @@ describe("GitHub Issue triage scheduler script", () => {
 
 async function schedulerScript(): Promise<string> {
   return readFile(
-    new URL("../loaders/issue-triage.js", import.meta.url),
+    new URL("../agents/issue-triage/scheduler.js", import.meta.url),
     "utf8",
   );
 }

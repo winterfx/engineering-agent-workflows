@@ -59,6 +59,16 @@ async function main(): Promise<void> {
 }
 
 async function loadPolicy(): Promise<TriagePolicy> {
+  const embedded = process.env.WORKFLOW_POLICY_JSON?.trim();
+  if (embedded) {
+    try {
+      return triagePolicySchema.parse(JSON.parse(embedded));
+    } catch (error) {
+      throw new Error(
+        `failed to load embedded triage policy: ${errorMessage(error)}`,
+      );
+    }
+  }
   return loadJsonFromCandidates(
     [
       fileURLToPath(new URL("../policy.json", import.meta.url)),
