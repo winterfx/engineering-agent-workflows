@@ -7,6 +7,18 @@ import {
 } from "../scripts/build-tools.js";
 
 describe("generated Scheduler artifact build", () => {
+  it("uses the CI-published Draft PR development image", async () => {
+    const compose = await readFile(
+      new URL("../agent-compose.yml", import.meta.url),
+      "utf8",
+    );
+
+    expect(compose).toContain(
+      "image: ghcr.io/winterfx/agent-compose-guest-dev:main",
+    );
+    expect(compose).not.toContain("image: agent-compose-guest-dev:local");
+  });
+
   it("builds every target by default", () => {
     expect(parseBuildArguments([])).toEqual({
       check: false,

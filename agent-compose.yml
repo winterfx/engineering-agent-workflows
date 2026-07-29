@@ -46,7 +46,7 @@ agents:
     description: Implement approved Issues, create Draft Pull Requests, and repair verified review or CI failures.
     provider: codex
     model: ${DRAFT_PR_MODEL}
-    image: agent-compose-guest-dev:local
+    image: ghcr.io/winterfx/agent-compose-guest-dev:main
 
     driver:
       docker: {}

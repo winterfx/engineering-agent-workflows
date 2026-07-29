@@ -119,8 +119,9 @@ Requirements:
 - Node.js 20 or newer
 - agent-compose with skills, event schedulers, and bind volumes
 - `./.draft-pr-workspaces` writable by the daemon and Agent sandbox
-- the local `agent-compose-guest-dev:local` Draft PR development image,
-  containing Go, `buf`, Task, and `ripgrep`
+- the published `ghcr.io/winterfx/agent-compose-guest-dev:main` Draft PR
+  development image, containing Go, `buf`, Task, `golangci-lint`, `nilaway`,
+  and `ripgrep`
 
 Before each Agent run, the Scheduler performs a credential-free workspace
 preparation step. Repositories containing `buf.gen.yaml` run `buf generate` in
