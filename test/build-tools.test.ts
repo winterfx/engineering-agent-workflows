@@ -80,4 +80,23 @@ describe("generated Scheduler artifact build", () => {
       expect(bundle).not.toContain("node_modules/zod/v4/locales/");
     }
   });
+
+  it("pins the Draft PR development image toolchain", async () => {
+    const dockerfile = await readFile(
+      new URL("../deploy/Dockerfile.agent-compose-guest-dev", import.meta.url),
+      "utf8",
+    );
+
+    expect(dockerfile).toContain("ARG BUF_VERSION=v1.68.1");
+    expect(dockerfile).toContain("ARG TASK_VERSION=v3.45.4");
+    expect(dockerfile).toContain(
+      "github.com/bufbuild/buf/cmd/buf@${BUF_VERSION}",
+    );
+    expect(dockerfile).toContain(
+      "github.com/go-task/task/v3/cmd/task@${TASK_VERSION}",
+    );
+    expect(dockerfile).toContain(
+      "apt-get install -y --no-install-recommends ripgrep",
+    );
+  });
 });

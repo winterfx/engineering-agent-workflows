@@ -1,0 +1,28 @@
+ARG BASE_IMAGE=ghcr.io/chaitin/agent-compose-guest:main
+
+FROM golang:1.26.4-alpine AS development-tools
+
+ARG BUF_VERSION=v1.68.1
+ARG TASK_VERSION=v3.45.4
+
+RUN mkdir -p /tool-bin \
+    && CGO_ENABLED=0 GOBIN=/tool-bin go install github.com/bufbuild/buf/cmd/buf@${BUF_VERSION} \
+    && CGO_ENABLED=0 GOBIN=/tool-bin go install github.com/go-task/task/v3/cmd/task@${TASK_VERSION}
+
+FROM ${BASE_IMAGE}
+
+COPY --from=development-tools /usr/local/go /usr/local/go
+COPY --from=development-tools /tool-bin/buf /usr/local/bin/buf
+COPY --from=development-tools /tool-bin/task /usr/local/bin/task
+
+ENV PATH=/usr/local/go/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ripgrep \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/local/go/bin/go /usr/local/bin/go \
+    && ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt \
+    && go version \
+    && buf --version \
+    && task --version \
+    && rg --version | head -n 1

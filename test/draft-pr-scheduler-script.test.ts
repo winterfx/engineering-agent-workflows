@@ -9,6 +9,10 @@ describe("Draft PR Scheduler script", () => {
     let agentOptions: Record<string, unknown> = {};
     let toolChunks: string[] = [];
     let workflowPolicyJson = "";
+    const shellCalls: Array<{
+      script: string;
+      options: Record<string, unknown> & { env: Record<string, string> };
+    }> = [];
     const context = vm.createContext({
       scheduler: {
         on(
@@ -19,8 +23,14 @@ describe("Draft PR Scheduler script", () => {
           handlers.set(topic, handler);
         },
         interval() {},
-        shell(_script: string, options: { env: Record<string, string> }) {
-          commands.push(options.env.DRAFT_PR_COMMAND ?? "");
+        shell(
+          script: string,
+          options: Record<string, unknown> & {
+            env: Record<string, string>;
+          },
+        ) {
+          shellCalls.push({ script, options });
+          commands.push(schedulerCommand(options.env));
           workflowPolicyJson = options.env.WORKFLOW_POLICY_JSON ?? "";
           toolChunks = Object.entries(options.env)
             .filter(([name]) => name.startsWith("WORKFLOW_TOOL_CHUNK_"))
@@ -78,7 +88,7 @@ describe("Draft PR Scheduler script", () => {
       },
     });
 
-    expect(commands).toEqual(["prepare", "apply"]);
+    expect(commands).toEqual(["prepare", "prepare-workspace", "apply"]);
     expect(result).toEqual({
       ok: true,
       applied: false,
@@ -95,6 +105,19 @@ describe("Draft PR Scheduler script", () => {
         readOnly: false,
       }),
     ]);
+    const workspacePreparation = shellCalls.find(
+      ({ options }) => options.env.DRAFT_PR_WORKSPACE_PREPARE === "1",
+    );
+    expect(workspacePreparation?.script).toContain("buf generate");
+    expect(workspacePreparation?.options.env).toEqual(
+      expect.objectContaining({
+        DRAFT_PR_WORKSPACE_PATH:
+          "/draft-pr-workspaces/repositories/0123456789abcdef/issue-439",
+        GITHUB_TOKEN: "",
+        GH_TOKEN: "",
+      }),
+    );
+    expect(workspacePreparation?.options.volumes).toEqual(agentOptions.volumes);
     expect(toolChunks.length).toBeGreaterThan(1);
     expect(toolChunks.every((chunk) => chunk.length <= 60000)).toBe(true);
     expect(JSON.parse(workflowPolicyJson)).toEqual(
@@ -198,7 +221,7 @@ describe("Draft PR Scheduler script", () => {
         },
         interval() {},
         shell(_script: string, options: { env: Record<string, string> }) {
-          commands.push(options.env.DRAFT_PR_COMMAND ?? "");
+          commands.push(schedulerCommand(options.env));
           if (options.env.DRAFT_PR_COMMAND === "fail") {
             failureMessage = options.env.DRAFT_PR_FAILURE ?? "";
           }
@@ -235,8 +258,71 @@ describe("Draft PR Scheduler script", () => {
       },
     });
 
-    expect(commands).toEqual(["prepare", "fail"]);
+    expect(commands).toEqual(["prepare", "prepare-workspace", "fail"]);
     expect(failureMessage).toBe("agent failed");
+    expect(result).toEqual({ ok: true, applied: true, outcome: "failed" });
+  });
+
+  it("records protobuf preparation failures before starting the Agent", async () => {
+    const handlers = new Map<string, (event: unknown) => unknown>();
+    const commands: string[] = [];
+    let failureMessage = "";
+    const context = vm.createContext({
+      scheduler: {
+        on(
+          topic: string,
+          _triggerID: string,
+          handler: (event: unknown) => unknown,
+        ) {
+          handlers.set(topic, handler);
+        },
+        interval() {},
+        shell(_script: string, options: { env: Record<string, string> }) {
+          const command = schedulerCommand(options.env);
+          commands.push(command);
+          if (command === "prepare-workspace") {
+            return { success: false, stdout: "buf generate failed" };
+          }
+          if (options.env.DRAFT_PR_COMMAND === "fail") {
+            failureMessage = options.env.DRAFT_PR_FAILURE ?? "";
+          }
+          const result =
+            options.env.DRAFT_PR_COMMAND === "prepare"
+              ? {
+                  ok: true,
+                  trigger: "ready",
+                  issueFingerprint: "a".repeat(20),
+                  workspacePath:
+                    "/draft-pr-workspaces/repositories/0123456789abcdef/issue-439",
+                  branch: "codex/issue-439",
+                  baseBranch: "main",
+                  baseCommit: "b".repeat(40),
+                }
+              : { ok: true, applied: true, outcome: "failed" };
+          return { success: true, stdout: JSON.stringify(result) };
+        },
+        agent() {
+          throw new Error("Agent must not start after preparation fails");
+        },
+      },
+    });
+    new vm.Script(await schedulerScript()).runInContext(context);
+
+    const result = handlers.get("webhook.github.issues")?.({
+      payload: {
+        body: {
+          action: "labeled",
+          label: { name: "agent:ready" },
+          issue: { number: 439 },
+          repository: { full_name: "chaitin/agent-compose" },
+        },
+      },
+    });
+
+    expect(commands).toEqual(["prepare", "prepare-workspace", "fail"]);
+    expect(failureMessage).toContain(
+      "Draft PR workspace preparation failed: buf generate failed",
+    );
     expect(result).toEqual({ ok: true, applied: true, outcome: "failed" });
   });
 
@@ -256,10 +342,10 @@ describe("Draft PR Scheduler script", () => {
         interval() {},
         shell(_script: string, options: { env: Record<string, string> }) {
           calls.push(options.env);
-          const command = options.env.DRAFT_PR_COMMAND ?? "";
+          const command = schedulerCommand(options.env);
           commands.push(command);
           const result =
-            command === "prepare-review"
+            options.env.DRAFT_PR_COMMAND === "prepare-review"
               ? {
                   ok: true,
                   repository: "chaitin/agent-compose",
@@ -333,7 +419,11 @@ describe("Draft PR Scheduler script", () => {
       },
     });
 
-    expect(commands).toEqual(["prepare-review", "apply-review"]);
+    expect(commands).toEqual([
+      "prepare-review",
+      "prepare-workspace",
+      "apply-review",
+    ]);
     expect(calls[0]).toEqual(
       expect.objectContaining({ DRAFT_PR_REVIEW_ID: "700" }),
     );
@@ -440,11 +530,12 @@ describe("Draft PR Scheduler script", () => {
       },
     });
 
-    expect(calls.map((call) => call.DRAFT_PR_COMMAND)).toEqual([
+    expect(calls.map(schedulerCommand)).toEqual([
       "prepare-review",
+      "prepare-workspace",
       "fail-review",
     ]);
-    expect(calls[1]).toEqual(
+    expect(calls[2]).toEqual(
       expect.objectContaining({
         DRAFT_PR_REVIEW_CURSOR: "3",
         DRAFT_PR_REVIEW_ITERATIONS: "2",
@@ -468,7 +559,7 @@ describe("Draft PR Scheduler script", () => {
         },
         interval() {},
         shell(_script: string, options: { env: Record<string, string> }) {
-          commands.push(options.env.DRAFT_PR_COMMAND ?? "");
+          commands.push(schedulerCommand(options.env));
           return { success: false, stdout: "provider unavailable" };
         },
         agent() {
@@ -510,10 +601,10 @@ describe("Draft PR Scheduler script", () => {
         },
         interval() {},
         shell(_script: string, options: { env: Record<string, string> }) {
-          const command = options.env.DRAFT_PR_COMMAND ?? "";
+          const command = schedulerCommand(options.env);
           commands.push(command);
           const result =
-            command === "prepare-ci"
+            options.env.DRAFT_PR_COMMAND === "prepare-ci"
               ? {
                   ok: true,
                   repository: "chaitin/agent-compose",
@@ -584,7 +675,7 @@ describe("Draft PR Scheduler script", () => {
       },
     });
 
-    expect(commands).toEqual(["prepare-ci", "apply-ci"]);
+    expect(commands).toEqual(["prepare-ci", "prepare-workspace", "apply-ci"]);
     expect(result).toEqual({
       ok: true,
       repository: "chaitin/agent-compose",
@@ -652,4 +743,10 @@ async function schedulerScript(): Promise<string> {
     new URL("../agents/draft-pr/scheduler.js", import.meta.url),
     "utf8",
   );
+}
+
+function schedulerCommand(env: Record<string, string>): string {
+  return env.DRAFT_PR_WORKSPACE_PREPARE === "1"
+    ? "prepare-workspace"
+    : (env.DRAFT_PR_COMMAND ?? "");
 }

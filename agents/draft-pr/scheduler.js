@@ -47,6 +47,37 @@ function agentWorkspaceVolume(workspacePath) {
   };
 }
 
+function prepareAgentWorkspace(workspacePath) {
+  const volume = agentWorkspaceVolume(workspacePath);
+  const result = scheduler.shell(
+    [
+      "set -eu",
+      'cd "$DRAFT_PR_WORKSPACE_PATH"',
+      "if [ -f buf.gen.yaml ]; then",
+      '  command -v buf >/dev/null 2>&1 || { echo "buf is required to generate repository protobuf artifacts" >&2; exit 1; }',
+      "  buf generate",
+      "fi",
+    ].join("\n"),
+    {
+      sandboxPolicy: "new",
+      env: {
+        DRAFT_PR_WORKSPACE_PREPARE: "1",
+        DRAFT_PR_WORKSPACE_PATH: workspacePath,
+        GITHUB_TOKEN: "",
+        GH_TOKEN: "",
+      },
+      volumes: [volume],
+      maxOutputBytes: 4 * 1024 * 1024,
+    },
+  );
+  if (!result.success) {
+    const output = String(result.stdout || result.output || "").trim();
+    throw new Error(
+      "Draft PR workspace preparation failed: " + output.slice(-4000),
+    );
+  }
+}
+
 function runDeterministicTool(script, env, label) {
   const result = scheduler.shell(
     [
@@ -403,6 +434,12 @@ function runReviewFix(repository, pullRequestNumber, reviewId) {
   }
   if (prepared.skipped || prepared.ignored) return prepared;
 
+  try {
+    prepareAgentWorkspace(prepared.workspacePath);
+  } catch (error) {
+    return recordReviewFailure(repository, pullRequestNumber, prepared, error);
+  }
+
   let reply;
   try {
     reply = scheduler.agent(
@@ -482,6 +519,12 @@ function runCiFix(repository, pullRequestNumber, headSha, checkSuiteId) {
     throw error;
   }
   if (prepared.skipped || prepared.ignored) return prepared;
+
+  try {
+    prepareAgentWorkspace(prepared.workspacePath);
+  } catch (error) {
+    return recordCiFailure(repository, pullRequestNumber, prepared, error);
+  }
 
   let reply;
   try {
@@ -597,6 +640,12 @@ function handleGitHubIssue(event) {
     return recordFailure(repository, issueNumber, error);
   }
   if (prepared.skipped || prepared.ignored) return prepared;
+
+  try {
+    prepareAgentWorkspace(prepared.workspacePath);
+  } catch (error) {
+    return recordFailure(repository, issueNumber, error);
+  }
 
   let reply;
   try {
