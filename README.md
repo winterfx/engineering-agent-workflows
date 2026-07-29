@@ -162,6 +162,8 @@ Copy `.env.example` to `.env`. The main settings are:
 - bot identity: `GITHUB_BOT_LOGIN`;
 - apply switches: `ISSUE_TRIAGE_APPLY`, `DRAFT_PR_APPLY`;
 - Draft PR allowlist: `DRAFT_PR_ALLOWED_REPOSITORY`;
+- Draft PR commit identity: `DRAFT_PR_GIT_AUTHOR_NAME` and
+  `DRAFT_PR_GIT_AUTHOR_EMAIL`;
 - optional model settings documented in `.env.example` and
   `agent-compose.yml`.
 

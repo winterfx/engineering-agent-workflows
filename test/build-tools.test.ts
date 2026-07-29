@@ -19,6 +19,20 @@ describe("generated Scheduler artifact build", () => {
     expect(compose).not.toContain("image: agent-compose-guest-dev:local");
   });
 
+  it("passes the configured Git identity to the Draft PR Agent", async () => {
+    const compose = await readFile(
+      new URL("../agent-compose.yml", import.meta.url),
+      "utf8",
+    );
+
+    expect(compose).toContain(
+      "DRAFT_PR_GIT_AUTHOR_NAME: ${DRAFT_PR_GIT_AUTHOR_NAME}",
+    );
+    expect(compose).toContain(
+      "DRAFT_PR_GIT_AUTHOR_EMAIL: ${DRAFT_PR_GIT_AUTHOR_EMAIL}",
+    );
+  });
+
   it("builds every target by default", () => {
     expect(parseBuildArguments([])).toEqual({
       check: false,
