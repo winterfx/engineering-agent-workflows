@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveGitHubToken } from "../github/app-auth.js";
 import { GitHubClient } from "../github/client.js";
 import { isRepositorySlug } from "../issues/types.js";
 import { envBoolean, requiredArgumentValue } from "../runtime/cli.js";
@@ -27,8 +28,9 @@ async function main(): Promise<void> {
     apply,
     process.env,
   );
+  const token = await resolveGitHubToken(options.repository);
   const issues = new GitHubClient({
-    ...(process.env.GITHUB_TOKEN ? { token: process.env.GITHUB_TOKEN } : {}),
+    ...(token ? { token } : {}),
     ...(process.env.GITHUB_API_URL
       ? { baseUrl: process.env.GITHUB_API_URL }
       : {}),

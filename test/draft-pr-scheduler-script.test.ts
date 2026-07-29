@@ -95,7 +95,14 @@ describe("Draft PR Scheduler script", () => {
       outcome: "implemented",
     });
     expect(agentOptions.sandboxEnv).toEqual(
-      expect.objectContaining({ GITHUB_TOKEN: "", GH_TOKEN: "" }),
+      expect.objectContaining({
+        GITHUB_TOKEN: "",
+        GH_TOKEN: "",
+        GITHUB_APP_CLIENT_ID: "",
+        GITHUB_APP_ID: "",
+        GITHUB_APP_INSTALLATION_ID: "",
+        GITHUB_APP_PRIVATE_KEY_BASE64: "",
+      }),
     );
     expect(agentOptions.volumes).toEqual([
       expect.objectContaining({
@@ -115,6 +122,10 @@ describe("Draft PR Scheduler script", () => {
           "/draft-pr-workspaces/repositories/0123456789abcdef/issue-439",
         GITHUB_TOKEN: "",
         GH_TOKEN: "",
+        GITHUB_APP_CLIENT_ID: "",
+        GITHUB_APP_ID: "",
+        GITHUB_APP_INSTALLATION_ID: "",
+        GITHUB_APP_PRIVATE_KEY_BASE64: "",
       }),
     );
     expect(workspacePreparation?.options.volumes).toEqual(agentOptions.volumes);
@@ -685,7 +696,14 @@ describe("Draft PR Scheduler script", () => {
     expect(agentPrompt).toContain("fix_ci mode");
     expect(agentPrompt).toContain("CI / Coverage gate");
     expect(agentOptions.sandboxEnv).toEqual(
-      expect.objectContaining({ GITHUB_TOKEN: "", GH_TOKEN: "" }),
+      expect.objectContaining({
+        GITHUB_TOKEN: "",
+        GH_TOKEN: "",
+        GITHUB_APP_CLIENT_ID: "",
+        GITHUB_APP_ID: "",
+        GITHUB_APP_INSTALLATION_ID: "",
+        GITHUB_APP_PRIVATE_KEY_BASE64: "",
+      }),
     );
   });
 

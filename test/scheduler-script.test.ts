@@ -73,6 +73,7 @@ describe("GitHub Issue triage scheduler script", () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     const commands: string[] = [];
     const senderLogins: string[] = [];
+    let agentOptions: { sandboxEnv?: Record<string, string> } = {};
     const context = vm.createContext({
       scheduler: {
         on(
@@ -99,7 +100,8 @@ describe("GitHub Issue triage scheduler script", () => {
               : { ok: true, applied: false, commentAction: "dry-run" };
           return { success: true, stdout: JSON.stringify(result) };
         },
-        agent() {
+        agent(_prompt: string, options: typeof agentOptions) {
+          agentOptions = options;
           return {
             success: true,
             finalText: JSON.stringify({ issueType: "bug" }),
@@ -141,6 +143,16 @@ describe("GitHub Issue triage scheduler script", () => {
       applied: false,
       commentAction: "dry-run",
     });
+    expect(agentOptions.sandboxEnv).toEqual(
+      expect.objectContaining({
+        GITHUB_TOKEN: "",
+        GH_TOKEN: "",
+        GITHUB_APP_CLIENT_ID: "",
+        GITHUB_APP_ID: "",
+        GITHUB_APP_INSTALLATION_ID: "",
+        GITHUB_APP_PRIVATE_KEY_BASE64: "",
+      }),
+    );
 
     for (const action of ["labeled", "unlabeled"]) {
       const labelResult = handlers.get("webhook.github.issues")?.({

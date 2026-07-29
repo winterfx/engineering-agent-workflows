@@ -243,6 +243,10 @@ function triageEvent(repository, issueNumber, senderLogin) {
       sandboxEnv: {
         GITHUB_TOKEN: "",
         GH_TOKEN: "",
+        GITHUB_APP_CLIENT_ID: "",
+        GITHUB_APP_ID: "",
+        GITHUB_APP_INSTALLATION_ID: "",
+        GITHUB_APP_PRIVATE_KEY_BASE64: "",
         ISSUE_TRIAGE_APPLY: "0",
       },
     },

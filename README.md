@@ -156,7 +156,9 @@ repository does not run a separate Webhook ingress or relay.
 
 Copy `.env.example` to `.env`. The main settings are:
 
-- provider credential: `GITHUB_TOKEN`;
+- provider credential: a legacy static `GITHUB_TOKEN`, or GitHub App
+  `GITHUB_APP_CLIENT_ID` (preferred) / `GITHUB_APP_ID` plus
+  `GITHUB_APP_PRIVATE_KEY_BASE64`;
 - bot identity: `GITHUB_BOT_LOGIN`;
 - apply switches: `ISSUE_TRIAGE_APPLY`, `DRAFT_PR_APPLY`;
 - Draft PR allowlist: `DRAFT_PR_ALLOWED_REPOSITORY`;
@@ -167,6 +169,22 @@ Webhook source credentials and public ingress configuration belong to the
 agent-compose deployment rather than this project's `.env`.
 
 Keep apply mode disabled until dry-run output has been reviewed.
+
+For GitHub App authentication, install the App on the allowlisted repository
+with the permissions above. Encode its PEM private key without line breaks:
+
+```bash
+openssl base64 -A -in github-app.private-key.pem
+```
+
+Store the result as `GITHUB_APP_PRIVATE_KEY_BASE64` and set
+`GITHUB_BOT_LOGIN` to the App slug followed by `[bot]`. The workflow signs a
+short-lived App JWT, discovers the installation from the target repository,
+and exchanges it for an installation access token on every trusted tool
+invocation. `GITHUB_APP_INSTALLATION_ID` may be set to skip discovery. A
+non-empty `GITHUB_TOKEN` takes precedence for backwards compatibility. App
+private keys remain available only to trusted deterministic tools and are
+cleared from Agent sandboxes.
 
 ## Verify and run
 
