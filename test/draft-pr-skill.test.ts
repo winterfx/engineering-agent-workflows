@@ -37,19 +37,46 @@ describe("Draft PR skill validation policy", () => {
       "utf8",
     );
 
+    expect(skill).toContain("Keep Agent validation lightweight in every mode");
+    expect(skill).toMatch(
+      /Never run Integration, E2E,\s+Docker smoke, the repository's full Coverage gate, or its complete\s+validation matrix in the Agent sandbox/,
+    );
     expect(skill).toContain(
-      "Do\n   not run the repository's complete validation matrix unless the active",
+      "even when a supplied CI failure\n   names one of those gates",
     );
     expect(skill).toMatch(
-      /the trusted Scheduler\s+independently runs the policy's required gates in a credential-free\s+sandbox/,
+      /the trusted Scheduler independently runs\s+the policy's required lightweight gates in a credential-free sandbox/,
     );
     expect(skill).toMatch(
-      /any failure blocks commit and push regardless of the Agent's\s+reported results/,
+      /any\s+failure blocks commit and push regardless of the Agent's\s+reported results/,
     );
     expect(skill).toContain("For `fix_validation` mode:");
     expect(skill).toContain(
       "The Scheduler will independently rerun every required gate after the repair",
     );
-    expect(skill).toContain("do not run unrelated CI gates");
+    expect(skill).toContain(
+      "Reproduce the smallest trustworthy scope that exercises\n  the supplied failure",
+    );
+    expect(skill).toContain("Defer those heavyweight scopes to provider CI");
+  });
+
+  it("pins deterministic commit validation to lightweight gates", async () => {
+    const policy = JSON.parse(
+      await readFile(
+        new URL("../agents/draft-pr/policy.json", import.meta.url),
+        "utf8",
+      ),
+    );
+
+    expect(policy.requiredValidationGates).toEqual([
+      "task-prepare",
+      "task-lint",
+      "task-test-unit",
+    ]);
+    expect(policy.requiredValidationGates).not.toContain(
+      "task-test-integration",
+    );
+    expect(policy.requiredValidationGates).not.toContain("task-test-e2e");
+    expect(policy.requiredValidationGates).not.toContain("task-test-coverage");
   });
 });
