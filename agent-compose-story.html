@@ -124,6 +124,37 @@
         color: var(--ink);
       }
 
+      .language-switch {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding-left: 10px;
+        border-left: 1px solid var(--line);
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 10px;
+      }
+
+      .language-switch button {
+        padding: 2px 3px;
+        color: inherit;
+        border: 0;
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .language-switch button:hover,
+      .language-switch button:focus-visible,
+      .language-switch button[aria-pressed="true"] {
+        color: var(--ink);
+      }
+
+      .language-switch button[aria-pressed="true"] {
+        text-decoration: underline;
+        text-decoration-color: var(--rust);
+        text-underline-offset: 4px;
+      }
+
       .blog-hero {
         min-height: 660px;
         display: grid;
@@ -2502,8 +2533,20 @@
           display: none;
         }
 
-        .top-nav a:not(:last-child) {
+        .top-nav {
+          gap: 10px;
+        }
+
+        .top-nav a:not([href="#demo"]) {
           display: none;
+        }
+
+        .brand > span:last-child {
+          display: none;
+        }
+
+        .language-switch {
+          padding-left: 8px;
         }
 
         .blog-hero {
@@ -3019,6 +3062,12 @@
         color: #fff;
       }
 
+      .language-switch button:hover,
+      .language-switch button:focus-visible,
+      .language-switch button[aria-pressed="true"] {
+        color: #fff;
+      }
+
       .blog-hero h1,
       .story-head h2,
       .tech-copy h2,
@@ -3458,11 +3507,25 @@
           </span>
           <span>engineering workflows</span>
         </div>
-        <nav class="top-nav" aria-label="页面导航">
+        <nav class="top-nav" aria-label="页面导航" data-i18n-aria="navLabel">
           <a href="#why">Why</a>
           <a href="#story">Story</a>
           <a href="#technology">Technology</a>
           <a href="#demo">Open demo ↗</a>
+          <span
+            class="language-switch"
+            role="group"
+            aria-label="语言切换"
+            data-i18n-aria="languageLabel"
+          >
+            <button type="button" data-language="zh" aria-pressed="true">
+              中文
+            </button>
+            <span aria-hidden="true">/</span>
+            <button type="button" data-language="en" aria-pressed="false">
+              EN
+            </button>
+          </span>
         </nav>
       </div>
     </header>
@@ -3476,18 +3539,18 @@
             <span>Built on agent-compose.</span><span>→</span
             ><span>Building agent-compose.</span>
           </div>
-          <p class="blog-lede">
+          <p class="blog-lede" data-i18n="heroLede">
             它运行在 agent-compose 上，也为 agent-compose 自己处理
             Issue、修改代码和修复 CI。
           </p>
           <div class="customer-zero">
             <span class="customer-zero-mark">“</span>
             <div>
-              <strong
+              <strong data-i18n-html="customerZeroTitle"
                 >开发者是 Customer Zero；能够自举，才够
                 <span class="word-highlight ai-native">AI Native</span></strong
               >
-              <small
+              <small data-i18n="customerZeroBody"
                 >让 Agent 先处理自己的 Issue、修改自己的代码、回应自己的
                 CI。</small
               >
@@ -3497,6 +3560,7 @@
         <div
           class="bootstrap-loop"
           aria-label="产品、开发者与 Agent 组成自举闭环"
+          data-i18n-aria="bootstrapLoopLabel"
         >
           <svg class="loop-orbit" viewBox="0 0 500 380" aria-hidden="true">
             <path
@@ -3532,12 +3596,16 @@
       <div class="story-head story-intro" id="story">
         <div>
           <div class="kicker">02 · Watch the workflow</div>
-          <h2>一个 Issue，如何走到 Draft PR？</h2>
+          <h2 data-i18n="storyTitle">一个 Issue，如何走到 Draft PR？</h2>
         </div>
         <span class="chapter-count" data-chapter-count>01 / 07</span>
       </div>
 
-      <section class="story-frame" aria-label="agent-compose 实现故事">
+      <section
+        class="story-frame"
+        aria-label="agent-compose 实现故事"
+        data-i18n-aria="storyFrameLabel"
+      >
         <div class="progress" data-progress></div>
 
         <article class="scene is-active" data-scene="0">
@@ -3545,6 +3613,7 @@
             <div
               class="github-window issue-form"
               aria-label="GitHub 新建 Issue 页面"
+              data-i18n-aria="newIssueLabel"
             >
               <div class="gh-browser-bar">
                 <span class="gh-browser-dot"></span
@@ -3576,7 +3645,7 @@
               <div class="gh-main">
                 <label class="gh-form-label">Add a title</label>
                 <div class="gh-input">
-                  <span class="issue-title-typed"
+                  <span class="issue-title-typed" data-i18n="issueTitle"
                     >Webhook 写入成功后仍返回 HTTP 500</span
                   >
                 </div>
@@ -3585,7 +3654,7 @@
                     B&nbsp;&nbsp; I&nbsp;&nbsp; &lt;&gt;&nbsp;&nbsp;
                     link&nbsp;&nbsp; list
                   </div>
-                  <span class="issue-body-typed"
+                  <span class="issue-body-typed" data-i18n="issueBody"
                     >生产环境可稳定复现；写入已经成功，但调用方会重试并产生重复事件。</span
                   >
                 </div>
@@ -3600,6 +3669,7 @@
             <div
               class="ac-pip after-submit"
               aria-label="agent-compose 接收到新 Issue 事件"
+              data-i18n-aria="issueReceivedLabel"
             >
               <div class="ac-pip-head">
                 <span class="ac-pip-brand"
@@ -3627,8 +3697,8 @@
           </div>
           <div class="scene-copy">
             <span class="scene-number">CHAPTER 01 · A CONTRIBUTOR</span>
-            <h2>故事从一个人遇到问题开始。</h2>
-            <p>
+            <h2 data-i18n="scene1Title">故事从一个人遇到问题开始。</h2>
+            <p data-i18n="scene1Body">
               贡献者打开熟悉的 GitHub Issue
               页面，写下现象、影响与复现方式，然后点击 “Submit new
               issue”。提交完成后，画中画亮起：agent-compose 第一次介入。
@@ -3642,7 +3712,11 @@
 
         <article class="scene" data-scene="1">
           <div class="scene-visual">
-            <div class="github-window" aria-label="GitHub Issue 自动分诊结果">
+            <div
+              class="github-window"
+              aria-label="GitHub Issue 自动分诊结果"
+              data-i18n-aria="triageResultLabel"
+            >
               <div class="gh-browser-bar">
                 <span class="gh-browser-dot"></span
                 ><span class="gh-browser-dot"></span
@@ -3670,7 +3744,9 @@
                 <div class="issue-page-head">
                   <div>
                     <div class="issue-page-title">
-                      Webhook 写入成功后仍返回 HTTP 500
+                      <span data-i18n="issueTitle"
+                        >Webhook 写入成功后仍返回 HTTP 500</span
+                      >
                       <span class="issue-number-muted">#439</span>
                     </div>
                     <span class="issue-state">● Open</span>
@@ -3682,7 +3758,7 @@
                       <div class="gh-comment-head">
                         <strong>lin</strong> opened this issue now
                       </div>
-                      <div class="gh-comment-body">
+                      <div class="gh-comment-body" data-i18n="issueBodyShort">
                         生产环境可稳定复现。写入成功后接口仍返回
                         500，调用方因此重试。
                       </div>
@@ -3691,7 +3767,10 @@
                       <div class="gh-comment-head">
                         <strong>issue-triage[bot]</strong> commented
                       </div>
-                      <div class="gh-comment-body">
+                      <div
+                        class="gh-comment-body"
+                        data-i18n-html="triageSummary"
+                      >
                         <strong>分诊摘要</strong
                         ><br />生产流程受影响；存在重复事件风险；建议优先检查响应写入顺序。
                       </div>
@@ -3712,7 +3791,11 @@
                 </div>
               </div>
             </div>
-            <div class="ac-pip" aria-label="agent-compose 正在执行自动分诊">
+            <div
+              class="ac-pip"
+              aria-label="agent-compose 正在执行自动分诊"
+              data-i18n-aria="triageRunningLabel"
+            >
               <div class="ac-pip-head">
                 <span class="ac-pip-brand"
                   ><span class="ac-pip-dot"></span>agent-compose</span
@@ -3739,8 +3822,8 @@
           </div>
           <div class="scene-copy">
             <span class="scene-number">CHAPTER 02 · AUTOMATIC TRIAGE</span>
-            <h2>几秒后，Issue 自己变得更清楚。</h2>
-            <p>
+            <h2 data-i18n="scene2Title">几秒后，Issue 自己变得更清楚。</h2>
+            <p data-i18n="scene2Body">
               使用者看到 labels 和一条分诊评论陆续出现。画中画同步点亮
               Webhook、Scheduler、Agent 与受管写入，让幕后执行变得可见。
             </p>
@@ -3756,6 +3839,7 @@
             <div
               class="github-window label-authorize"
               aria-label="维护者为 GitHub Issue 添加 agent ready 标签"
+              data-i18n-aria="authorizeIssueLabel"
             >
               <div class="gh-browser-bar">
                 <span class="gh-browser-dot"></span
@@ -3783,7 +3867,9 @@
                 <div class="issue-page-head">
                   <div>
                     <div class="issue-page-title">
-                      Webhook 写入成功后仍返回 HTTP 500
+                      <span data-i18n="issueTitle"
+                        >Webhook 写入成功后仍返回 HTTP 500</span
+                      >
                       <span class="issue-number-muted">#439</span>
                     </div>
                     <span class="issue-state">● Open</span>
@@ -3794,7 +3880,10 @@
                     <div class="gh-comment-head">
                       <strong>issue-triage[bot]</strong> commented
                     </div>
-                    <div class="gh-comment-body">
+                    <div
+                      class="gh-comment-body"
+                      data-i18n="triageRecommendation"
+                    >
                       范围明确、可复现，建议作为低风险修复处理。
                     </div>
                   </div>
@@ -3830,6 +3919,7 @@
             <div
               class="ac-pip waiting"
               aria-label="agent-compose 正在等待维护者授权"
+              data-i18n-aria="waitingAuthorizationLabel"
             >
               <div class="ac-pip-head">
                 <span class="ac-pip-brand"
@@ -3857,8 +3947,8 @@
           </div>
           <div class="scene-copy">
             <span class="scene-number">CHAPTER 03 · THE HUMAN GATE</span>
-            <h2>维护者看完信息，做第一次关键决定。</h2>
-            <p>
+            <h2 data-i18n="scene3Title">维护者看完信息，做第一次关键决定。</h2>
+            <p data-i18n-html="scene3Body">
               问题清楚、范围合适时，维护者在 GitHub 标签菜单中选择
               <code>agent:ready</code>。这不是普通状态标记，而是允许 Agent
               修改仓库的明确授权；在此之前，画中画会一直显示 WAITING。
@@ -3874,6 +3964,7 @@
             <div
               class="github-window"
               aria-label="GitHub Issue 显示 Agent 正在工作"
+              data-i18n-aria="agentWorkingLabel"
             >
               <div class="gh-browser-bar">
                 <span class="gh-browser-dot"></span
@@ -3902,7 +3993,9 @@
                 <div class="issue-page-head">
                   <div>
                     <div class="issue-page-title">
-                      Webhook 写入成功后仍返回 HTTP 500
+                      <span data-i18n="issueTitle"
+                        >Webhook 写入成功后仍返回 HTTP 500</span
+                      >
                       <span class="issue-number-muted">#439</span>
                     </div>
                     <div class="gh-labels" style="margin-top: 8px">
@@ -3912,19 +4005,25 @@
                 </div>
                 <div class="work-progress">
                   <div class="work-progress-row">
-                    <span></span><strong>验证 Issue 与仓库状态</strong
+                    <span></span
+                    ><strong data-i18n="workValidate"
+                      >验证 Issue 与仓库状态</strong
                     ><small>trusted tool</small>
                   </div>
                   <div class="work-progress-row">
-                    <span></span><strong>准备隔离 workspace</strong
+                    <span></span
+                    ><strong data-i18n="workSandbox">准备隔离 workspace</strong
                     ><small>new sandbox</small>
                   </div>
                   <div class="work-progress-row">
-                    <span></span><strong>实现修复并添加回归测试</strong
+                    <span></span
+                    ><strong data-i18n="workImplement"
+                      >实现修复并添加回归测试</strong
                     ><small>Draft PR Agent</small>
                   </div>
                   <div class="work-progress-row">
-                    <span></span><strong>检查 diff、测试与风险</strong
+                    <span></span
+                    ><strong data-i18n="workCheck">检查 diff、测试与风险</strong
                     ><small>trusted tool</small>
                   </div>
                 </div>
@@ -3933,6 +4032,7 @@
             <div
               class="ac-pip"
               aria-label="agent-compose 正在编排 Draft PR Agent"
+              data-i18n-aria="draftAgentRunningLabel"
             >
               <div class="ac-pip-head">
                 <span class="ac-pip-brand"
@@ -3960,8 +4060,8 @@
           </div>
           <div class="scene-copy">
             <span class="scene-number">CHAPTER 04 · WORK IN PROGRESS</span>
-            <h2>使用者留在 GitHub，幕后开始工作。</h2>
-            <p>
+            <h2 data-i18n="scene4Title">使用者留在 GitHub，幕后开始工作。</h2>
+            <p data-i18n-html="scene4Body">
               Issue 进入 <code>agent:running</code>。agent-compose 在全新
               sandbox 中挂载隔离 checkout；Agent 可以编辑和测试，但拿不到 GitHub
               凭据，也不能 commit 或 push。
@@ -3977,6 +4077,7 @@
             <div
               class="github-window"
               aria-label="GitHub Draft Pull Request 页面"
+              data-i18n-aria="draftPrLabel"
             >
               <div class="gh-browser-bar">
                 <span class="gh-browser-dot"></span
@@ -4047,6 +4148,7 @@
             <div
               class="ac-pip"
               aria-label="agent-compose 已验证并创建 Draft PR"
+              data-i18n-aria="draftPrCreatedLabel"
             >
               <div class="ac-pip-head">
                 <span class="ac-pip-brand"
@@ -4074,8 +4176,10 @@
           </div>
           <div class="scene-copy">
             <span class="scene-number">CHAPTER 05 · A DRAFT APPEARS</span>
-            <h2>Issue 旁边，出现一份可以阅读的 Draft PR。</h2>
-            <p>
+            <h2 data-i18n="scene5Title">
+              Issue 旁边，出现一份可以阅读的 Draft PR。
+            </h2>
+            <p data-i18n="scene5Body">
               可信外层验证 diff、测试、secret 与风险后，才替 Agent
               commit、non-force push 并创建 Draft
               PR。使用者直接看到摘要、测试和完整改动。
@@ -4092,6 +4196,7 @@
             <div
               class="github-window"
               aria-label="GitHub Pull Request 检查与自动修复页面"
+              data-i18n-aria="ciRepairLabel"
             >
               <div class="gh-browser-bar">
                 <span class="gh-browser-dot"></span
@@ -4165,7 +4270,11 @@
                 </div>
               </div>
             </div>
-            <div class="ac-pip" aria-label="agent-compose 正在执行 CI 修复循环">
+            <div
+              class="ac-pip"
+              aria-label="agent-compose 正在执行 CI 修复循环"
+              data-i18n-aria="ciLoopLabel"
+            >
               <div class="ac-pip-head">
                 <span class="ac-pip-brand"
                   ><span class="ac-pip-dot"></span>agent-compose</span
@@ -4192,8 +4301,10 @@
           </div>
           <div class="scene-copy">
             <span class="scene-number">CHAPTER 06 · FEEDBACK LOOP</span>
-            <h2>CI 或 Review 提出问题，PR 会继续长好。</h2>
-            <p>
+            <h2 data-i18n="scene6Title">
+              CI 或 Review 提出问题，PR 会继续长好。
+            </h2>
+            <p data-i18n="scene6Body">
               失败的 check suite 或可信 Reviewer 的 changes requested
               会触发一次新的隔离运行。Agent 验证问题并修复；每批最多一个
               commit，绝不 force-push。
@@ -4210,6 +4321,7 @@
             <div
               class="github-window"
               aria-label="GitHub Pull Request 等待维护者最终决定"
+              data-i18n-aria="maintainerDecisionLabel"
             >
               <div class="gh-browser-bar">
                 <span class="gh-browser-dot"></span
@@ -4277,6 +4389,7 @@
             <div
               class="ac-pip human-only"
               aria-label="agent-compose 已停止自动化并等待维护者"
+              data-i18n-aria="automationStoppedLabel"
             >
               <div class="ac-pip-head">
                 <span class="ac-pip-brand"
@@ -4304,8 +4417,8 @@
           </div>
           <div class="scene-copy">
             <span class="scene-number">CHAPTER 07 · BACK TO THE HUMAN</span>
-            <h2>最后，镜头回到维护者面前。</h2>
-            <p>
+            <h2 data-i18n="scene7Title">最后，镜头回到维护者面前。</h2>
+            <p data-i18n="scene7Body">
               完整 diff、测试和修复记录都在熟悉的 GitHub PR 页面里。Workflow
               在这里停下：是否标记 ready、是否 merge、是否关闭
               Issue，始终由维护者决定。
@@ -4316,10 +4429,19 @@
           </div>
         </article>
 
-        <div class="controls" aria-label="故事播放控制">
+        <div
+          class="controls"
+          aria-label="故事播放控制"
+          data-i18n-aria="playbackLabel"
+        >
           <div class="chapter-dots" data-chapter-dots></div>
           <div class="playback">
-            <button class="control-button" type="button" data-prev>
+            <button
+              class="control-button"
+              type="button"
+              data-prev
+              data-i18n="previousScene"
+            >
               ← 上一幕
             </button>
             <button class="control-button primary" type="button" data-play>
@@ -4335,16 +4457,20 @@
       <section class="tech-section" id="technology" data-tech-section>
         <div class="tech-copy">
           <div class="section-label">03 · Under the hood</div>
-          <h2>
+          <h2 data-i18n-html="technologyTitle">
             幕后，从一份 <span class="word-highlight yaml-word">YAML</span>
             开始。
           </h2>
-          <p>
+          <p data-i18n="technologyBody">
             配置声明 Agent、Skill 和
             Scheduler；运行时再把事件、隔离环境与可信写入依次点亮。
           </p>
         </div>
-        <div class="tech-board" aria-label="agent-compose YAML 与运行状态">
+        <div
+          class="tech-board"
+          aria-label="agent-compose YAML 与运行状态"
+          data-i18n-aria="technologyBoardLabel"
+        >
           <div class="tech-board-head">
             <span>agent-compose.yml</span><span>declarative → runtime</span>
           </div>
@@ -4385,8 +4511,8 @@
       <section class="demo-cta" id="demo">
         <div>
           <div class="section-label">04 · See it for yourself</div>
-          <h2>别停下，去现场看看。</h2>
-          <p>
+          <h2 data-i18n="demoTitle">别停下，去现场看看。</h2>
+          <p data-i18n="demoBody">
             打开 Agent Compose UI，查看一次真实 Issue，或直接阅读 Workflow
             源码。
           </p>
@@ -4397,21 +4523,23 @@
             href="https://demo.agent-compose.ai"
             target="_blank"
             rel="noreferrer"
-            >打开 Agent Compose UI <span>↗</span></a
+            ><span data-i18n="openUi">打开 Agent Compose UI</span>
+            <span>↗</span></a
           >
           <a
             class="demo-button"
             href="https://github.com/chaitin/agent-compose/issues"
             target="_blank"
             rel="noreferrer"
-            >查看真实 Issue <span>↗</span></a
+            ><span data-i18n="viewIssue">查看真实 Issue</span> <span>↗</span></a
           >
           <a
             class="demo-button"
             href="https://github.com/winterfx/engineering-agent-workflows"
             target="_blank"
             rel="noreferrer"
-            >浏览 Workflow 仓库 <span>→</span></a
+            ><span data-i18n="browseRepo">浏览 Workflow 仓库</span>
+            <span>→</span></a
           >
         </div>
       </section>
@@ -4424,6 +4552,187 @@
 
     <script>
       (() => {
+        const translations = {
+          zh: {
+            pageTitle: "让 Agent 参与构建自己 · engineering-agent-workflows",
+            pageDescription:
+              "为什么 AI 时代的 Agent 产品必须能够自举，以及 engineering-agent-workflows 如何用 agent-compose 把 Issue 变成可评审的 Draft PR。",
+            navLabel: "页面导航",
+            languageLabel: "语言切换",
+            heroLede:
+              "它运行在 agent-compose 上，也为 agent-compose 自己处理 Issue、修改代码和修复 CI。",
+            customerZeroTitle:
+              '开发者是 Customer Zero；能够自举，才够 <span class="word-highlight ai-native">AI Native</span>',
+            customerZeroBody:
+              "让 Agent 先处理自己的 Issue、修改自己的代码、回应自己的 CI。",
+            bootstrapLoopLabel: "产品、开发者与 Agent 组成自举闭环",
+            storyTitle: "一个 Issue，如何走到 Draft PR？",
+            storyFrameLabel: "agent-compose 实现故事",
+            newIssueLabel: "GitHub 新建 Issue 页面",
+            issueTitle: "Webhook 写入成功后仍返回 HTTP 500",
+            issueBody:
+              "生产环境可稳定复现；写入已经成功，但调用方会重试并产生重复事件。",
+            issueReceivedLabel: "agent-compose 接收到新 Issue 事件",
+            scene1Title: "故事从一个人遇到问题开始。",
+            scene1Body:
+              "贡献者打开熟悉的 GitHub Issue 页面，写下现象、影响与复现方式，然后点击 “Submit new issue”。提交完成后，画中画亮起：agent-compose 第一次介入。",
+            triageResultLabel: "GitHub Issue 自动分诊结果",
+            issueBodyShort:
+              "生产环境可稳定复现。写入成功后接口仍返回 500，调用方因此重试。",
+            triageSummary:
+              "<strong>分诊摘要</strong><br />生产流程受影响；存在重复事件风险；建议优先检查响应写入顺序。",
+            triageRunningLabel: "agent-compose 正在执行自动分诊",
+            scene2Title: "几秒后，Issue 自己变得更清楚。",
+            scene2Body:
+              "使用者看到 labels 和一条分诊评论陆续出现。画中画同步点亮 Webhook、Scheduler、Agent 与受管写入，让幕后执行变得可见。",
+            authorizeIssueLabel: "维护者为 GitHub Issue 添加 agent ready 标签",
+            triageRecommendation: "范围明确、可复现，建议作为低风险修复处理。",
+            waitingAuthorizationLabel: "agent-compose 正在等待维护者授权",
+            scene3Title: "维护者看完信息，做第一次关键决定。",
+            scene3Body:
+              "问题清楚、范围合适时，维护者在 GitHub 标签菜单中选择 <code>agent:ready</code>。这不是普通状态标记，而是允许 Agent 修改仓库的明确授权；在此之前，画中画会一直显示 WAITING。",
+            agentWorkingLabel: "GitHub Issue 显示 Agent 正在工作",
+            workValidate: "验证 Issue 与仓库状态",
+            workSandbox: "准备隔离 workspace",
+            workImplement: "实现修复并添加回归测试",
+            workCheck: "检查 diff、测试与风险",
+            draftAgentRunningLabel: "agent-compose 正在编排 Draft PR Agent",
+            scene4Title: "使用者留在 GitHub，幕后开始工作。",
+            scene4Body:
+              "Issue 进入 <code>agent:running</code>。agent-compose 在全新 sandbox 中挂载隔离 checkout；Agent 可以编辑和测试，但拿不到 GitHub 凭据，也不能 commit 或 push。",
+            draftPrLabel: "GitHub Draft Pull Request 页面",
+            draftPrCreatedLabel: "agent-compose 已验证并创建 Draft PR",
+            scene5Title: "Issue 旁边，出现一份可以阅读的 Draft PR。",
+            scene5Body:
+              "可信外层验证 diff、测试、secret 与风险后，才替 Agent commit、non-force push 并创建 Draft PR。使用者直接看到摘要、测试和完整改动。",
+            ciRepairLabel: "GitHub Pull Request 检查与自动修复页面",
+            ciLoopLabel: "agent-compose 正在执行 CI 修复循环",
+            scene6Title: "CI 或 Review 提出问题，PR 会继续长好。",
+            scene6Body:
+              "失败的 check suite 或可信 Reviewer 的 changes requested 会触发一次新的隔离运行。Agent 验证问题并修复；每批最多一个 commit，绝不 force-push。",
+            maintainerDecisionLabel: "GitHub Pull Request 等待维护者最终决定",
+            automationStoppedLabel: "agent-compose 已停止自动化并等待维护者",
+            scene7Title: "最后，镜头回到维护者面前。",
+            scene7Body:
+              "完整 diff、测试和修复记录都在熟悉的 GitHub PR 页面里。Workflow 在这里停下：是否标记 ready、是否 merge、是否关闭 Issue，始终由维护者决定。",
+            playbackLabel: "故事播放控制",
+            previousScene: "← 上一幕",
+            nextScene: "下一幕 →",
+            restart: "重新开始 ↻",
+            pause: "暂停",
+            continue: "继续播放",
+            start: "开始播放",
+            jumpToScene: "跳到第 {number} 幕",
+            technologyTitle:
+              '幕后，从一份 <span class="word-highlight yaml-word">YAML</span> 开始。',
+            technologyBody:
+              "配置声明 Agent、Skill 和 Scheduler；运行时再把事件、隔离环境与可信写入依次点亮。",
+            technologyBoardLabel: "agent-compose YAML 与运行状态",
+            demoTitle: "别停下，去现场看看。",
+            demoBody:
+              "打开 Agent Compose UI，查看一次真实 Issue，或直接阅读 Workflow 源码。",
+            openUi: "打开 Agent Compose UI",
+            viewIssue: "查看真实 Issue",
+            browseRepo: "浏览 Workflow 仓库",
+          },
+          en: {
+            pageTitle:
+              "Let the Agent Build Itself · engineering-agent-workflows",
+            pageDescription:
+              "Why an Agent product must be able to bootstrap itself in the AI era, and how engineering-agent-workflows uses agent-compose to turn an Issue into a reviewable Draft PR.",
+            navLabel: "Page navigation",
+            languageLabel: "Language selector",
+            heroLede:
+              "It runs on agent-compose while handling agent-compose’s own Issues, code changes, and CI fixes.",
+            customerZeroTitle:
+              'Developers are Customer Zero; self-hosting is what makes a product truly <span class="word-highlight ai-native">AI Native</span>',
+            customerZeroBody:
+              "Let the Agent handle its own Issues, change its own code, and respond to its own CI first.",
+            bootstrapLoopLabel:
+              "A self-building loop connecting the product, developers, and Agent",
+            storyTitle: "How does an Issue become a Draft PR?",
+            storyFrameLabel: "The agent-compose implementation story",
+            newIssueLabel: "GitHub new Issue page",
+            issueTitle:
+              "Webhook still returns HTTP 500 after successful persistence",
+            issueBody:
+              "Consistently reproducible in production; persistence succeeds, but the caller retries and creates duplicate events.",
+            issueReceivedLabel: "agent-compose receives the new Issue event",
+            scene1Title: "The story begins when someone finds a problem.",
+            scene1Body:
+              "A contributor opens the familiar GitHub Issue page, describes the symptoms, impact, and reproduction steps, then clicks “Submit new issue.” Once submitted, agent-compose lights up in the inset for the first time.",
+            triageResultLabel: "GitHub Issue after automatic triage",
+            issueBodyShort:
+              "Consistently reproducible in production. Persistence succeeds, but the API still returns 500, causing the caller to retry.",
+            triageSummary:
+              "<strong>Triage summary</strong><br />The production flow is affected, duplicate events are possible, and response ordering should be investigated first.",
+            triageRunningLabel: "agent-compose is running automatic triage",
+            scene2Title: "Seconds later, the Issue explains itself better.",
+            scene2Body:
+              "The user sees labels and a triage comment appear. The inset lights up Webhook, Scheduler, Agent, and managed writes in sequence, making the work behind the scenes visible.",
+            authorizeIssueLabel:
+              "Maintainer adds the agent ready label to the GitHub Issue",
+            triageRecommendation:
+              "The scope is clear and reproducible; treat this as a low-risk fix.",
+            waitingAuthorizationLabel:
+              "agent-compose is waiting for maintainer authorization",
+            scene3Title:
+              "The maintainer reviews the details and makes the first key decision.",
+            scene3Body:
+              "When the problem is clear and appropriately scoped, the maintainer selects <code>agent:ready</code> from GitHub’s label menu. This is not an ordinary status marker: it explicitly authorizes the Agent to modify the repository. Until then, the inset remains WAITING.",
+            agentWorkingLabel: "GitHub Issue showing the Agent at work",
+            workValidate: "Validate Issue and repository state",
+            workSandbox: "Prepare an isolated workspace",
+            workImplement: "Implement the fix and add a regression test",
+            workCheck: "Check the diff, tests, and risk",
+            draftAgentRunningLabel:
+              "agent-compose is orchestrating the Draft PR Agent",
+            scene4Title:
+              "The user stays in GitHub while the work begins behind the scenes.",
+            scene4Body:
+              "The Issue moves to <code>agent:running</code>. agent-compose mounts an isolated checkout in a fresh sandbox. The Agent can edit and test, but it receives no GitHub credentials and cannot commit or push.",
+            draftPrLabel: "GitHub Draft Pull Request page",
+            draftPrCreatedLabel:
+              "agent-compose has validated and created the Draft PR",
+            scene5Title: "A readable Draft PR appears alongside the Issue.",
+            scene5Body:
+              "Only after the trusted boundary validates the diff, tests, secrets, and risk does it commit for the Agent, non-force push, and create a Draft PR. The user can immediately review the summary, tests, and complete changes.",
+            ciRepairLabel:
+              "GitHub Pull Request checks and automatic repair page",
+            ciLoopLabel: "agent-compose is running the CI repair loop",
+            scene6Title:
+              "When CI or Review finds a problem, the PR keeps improving.",
+            scene6Body:
+              "A failed check suite or changes requested by a trusted Reviewer triggers a fresh isolated run. The Agent verifies and repairs the problem, producing at most one commit per batch and never force-pushing.",
+            maintainerDecisionLabel:
+              "GitHub Pull Request awaiting the maintainer’s final decision",
+            automationStoppedLabel:
+              "agent-compose has stopped automation and is waiting for the maintainer",
+            scene7Title: "Finally, the focus returns to the maintainer.",
+            scene7Body:
+              "The complete diff, tests, and repair history remain in the familiar GitHub PR page. The Workflow stops here: marking ready, merging, or closing the Issue always remains the maintainer’s decision.",
+            playbackLabel: "Story playback controls",
+            previousScene: "← Previous",
+            nextScene: "Next →",
+            restart: "Restart ↻",
+            pause: "Pause",
+            continue: "Continue",
+            start: "Start",
+            jumpToScene: "Jump to chapter {number}",
+            technologyTitle:
+              'Behind the scenes, it starts with a <span class="word-highlight yaml-word">YAML</span> file.',
+            technologyBody:
+              "Configuration declares the Agent, Skill, and Scheduler. At runtime, events, isolation, and trusted writes light up in sequence.",
+            technologyBoardLabel: "agent-compose YAML and runtime status",
+            demoTitle: "Don’t stop here—see it in action.",
+            demoBody:
+              "Open the Agent Compose UI, inspect a real Issue, or read the Workflow source.",
+            openUi: "Open Agent Compose UI",
+            viewIssue: "View real Issues",
+            browseRepo: "Browse Workflow repository",
+          },
+        };
+
         const scenes = [...document.querySelectorAll("[data-scene]")];
         const dotsRoot = document.querySelector("[data-chapter-dots]");
         const count = document.querySelector("[data-chapter-count]");
@@ -4431,19 +4740,71 @@
         const prevButton = document.querySelector("[data-prev]");
         const nextButton = document.querySelector("[data-next]");
         const playButton = document.querySelector("[data-play]");
+        const languageButtons = [
+          ...document.querySelectorAll("[data-language]"),
+        ];
+        const metaDescription = document.querySelector(
+          'meta[name="description"]',
+        );
         const reducedMotion = window.matchMedia(
           "(prefers-reduced-motion: reduce)",
         ).matches;
         let active = 0;
         let playing = !reducedMotion;
+        let hasPlayed = !reducedMotion;
+        let language = "zh";
         let storyTimer;
+
+        function t(key, replacements = {}) {
+          return Object.entries(replacements).reduce(
+            (value, [name, replacement]) =>
+              value.replace(`{${name}}`, replacement),
+            translations[language][key],
+          );
+        }
+
+        function updatePlaybackLabels() {
+          nextButton.textContent =
+            active === scenes.length - 1 ? t("restart") : t("nextScene");
+          playButton.textContent = playing
+            ? t("pause")
+            : t(hasPlayed ? "continue" : "start");
+        }
+
+        function setLanguage(nextLanguage) {
+          language = nextLanguage;
+          document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
+          document.title = t("pageTitle");
+          metaDescription.setAttribute("content", t("pageDescription"));
+          document.querySelectorAll("[data-i18n]").forEach((element) => {
+            element.textContent = t(element.dataset.i18n);
+          });
+          document.querySelectorAll("[data-i18n-html]").forEach((element) => {
+            element.innerHTML = t(element.dataset.i18nHtml);
+          });
+          document.querySelectorAll("[data-i18n-aria]").forEach((element) => {
+            element.setAttribute("aria-label", t(element.dataset.i18nAria));
+          });
+          languageButtons.forEach((button) => {
+            button.setAttribute(
+              "aria-pressed",
+              String(button.dataset.language === language),
+            );
+          });
+          dots.forEach((dot, index) => {
+            dot.setAttribute(
+              "aria-label",
+              t("jumpToScene", { number: String(index + 1) }),
+            );
+          });
+          updatePlaybackLabels();
+        }
 
         scenes.forEach((_, index) => {
           const dot = document.createElement("button");
           dot.type = "button";
           dot.className = "chapter-dot";
           dot.textContent = String(index + 1).padStart(2, "0");
-          dot.setAttribute("aria-label", `跳到第 ${index + 1} 幕`);
           dot.addEventListener("click", () => showScene(index, true));
           dotsRoot.appendChild(dot);
         });
@@ -4480,12 +4841,10 @@
             `${((active + 1) / scenes.length) * 100}%`,
           );
           prevButton.disabled = active === 0;
-          nextButton.textContent =
-            active === scenes.length - 1 ? "重新开始 ↻" : "下一幕 →";
           if (pauseAfterSelection) {
             playing = false;
-            playButton.textContent = "继续播放";
           }
+          updatePlaybackLabels();
           scheduleNext();
         }
 
@@ -4495,8 +4854,14 @@
         );
         playButton.addEventListener("click", () => {
           playing = !playing;
-          playButton.textContent = playing ? "暂停" : "继续播放";
+          if (playing) hasPlayed = true;
+          updatePlaybackLabels();
           scheduleNext();
+        });
+        languageButtons.forEach((button) => {
+          button.addEventListener("click", () => {
+            setLanguage(button.dataset.language);
+          });
         });
 
         const techSection = document.querySelector("[data-tech-section]");
@@ -4514,7 +4879,7 @@
           techObserver.observe(techSection);
         }
 
-        if (reducedMotion) playButton.textContent = "开始播放";
+        setLanguage("zh");
         showScene(0, false);
       })();
     </script>
