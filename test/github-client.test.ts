@@ -9,6 +9,92 @@ interface RecordedRequest {
 }
 
 describe("GitHubClient", () => {
+  it("retries transient GET transport failures", async () => {
+    let attempts = 0;
+    const delays: number[] = [];
+    const client = new GitHubClient({
+      baseUrl: "https://github.test/api",
+      fetch: (async () => {
+        attempts += 1;
+        if (attempts < 3) {
+          throw new TypeError("fetch failed", {
+            cause: Object.assign(new Error("Connect Timeout Error"), {
+              code: "UND_ERR_CONNECT_TIMEOUT",
+            }),
+          });
+        }
+        return jsonResponse({ default_branch: "main" });
+      }) as typeof fetch,
+      sleep: async (milliseconds) => {
+        delays.push(milliseconds);
+      },
+    });
+
+    await expect(
+      client.getRepositoryDefaultBranch("chaitin/agent-compose"),
+    ).resolves.toBe("main");
+    expect(attempts).toBe(3);
+    expect(delays).toHaveLength(2);
+  });
+
+  it("reports exhausted GET retries with safe request context and cause", async () => {
+    const cause = Object.assign(new Error("Connect Timeout Error"), {
+      code: "UND_ERR_CONNECT_TIMEOUT",
+    });
+    const client = new GitHubClient({
+      baseUrl: "https://github.test/api",
+      fetch: (async () => {
+        throw new TypeError("fetch failed", { cause });
+      }) as typeof fetch,
+      sleep: async () => undefined,
+    });
+
+    const error = await client
+      .getRepositoryDefaultBranch("chaitin/agent-compose")
+      .catch((value: unknown) => value);
+    expect(error).toMatchObject({
+      message:
+        "GitHub API GET /repos/chaitin/agent-compose transport failed after 3 attempts",
+      cause: expect.objectContaining({ message: "fetch failed" }),
+    });
+  });
+
+  it("retries transient GitHub gateway responses", async () => {
+    const statuses = [503, 502, 200];
+    const client = new GitHubClient({
+      baseUrl: "https://github.test/api",
+      fetch: (async () => {
+        const status = statuses.shift() ?? 500;
+        return status === 200
+          ? jsonResponse({ default_branch: "main" })
+          : new Response("unavailable", { status });
+      }) as typeof fetch,
+      sleep: async () => undefined,
+    });
+
+    await expect(
+      client.getRepositoryDefaultBranch("chaitin/agent-compose"),
+    ).resolves.toBe("main");
+    expect(statuses).toEqual([]);
+  });
+
+  it("does not retry GitHub write requests", async () => {
+    let attempts = 0;
+    const client = new GitHubClient({
+      baseUrl: "https://github.test/api",
+      fetch: (async () => {
+        attempts += 1;
+        throw new TypeError("fetch failed");
+      }) as typeof fetch,
+      sleep: async () => undefined,
+    });
+
+    await expect(
+      client.createComment("chaitin/agent-compose", 41, "report"),
+    ).rejects.toThrow("failed after 1 attempt");
+    expect(attempts).toBe(1);
+  });
+
   it("uses Bearer auth and normalizes an Issue", async () => {
     const requests: RecordedRequest[] = [];
     const client = new GitHubClient({

@@ -1,4 +1,5 @@
 import { sign } from "node:crypto";
+import { fetchWithRetry } from "./fetch-retry.js";
 
 const DEFAULT_GITHUB_API_URL = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
@@ -6,6 +7,7 @@ const GITHUB_API_VERSION = "2022-11-28";
 export interface GitHubTokenDependencies {
   fetch?: typeof fetch;
   now?: () => number;
+  sleep?: (milliseconds: number) => Promise<void>;
 }
 
 interface GitHubInstallationAPI {
@@ -57,15 +59,26 @@ export async function resolveGitHubToken(
   const request = dependencies.fetch ?? fetch;
   const installationID = configuredInstallationID
     ? validateInstallationID(configuredInstallationID)
-    : await findInstallationID(baseUrl, repository, jwt, request);
+    : await findInstallationID(
+        baseUrl,
+        repository,
+        jwt,
+        request,
+        dependencies.sleep,
+      );
 
-  const response = await request(
-    `${baseUrl}/app/installations/${installationID}/access_tokens`,
-    {
+  const tokenPath = `/app/installations/${installationID}/access_tokens`;
+  const response = await fetchWithRetry({
+    request,
+    input: `${baseUrl}${tokenPath}`,
+    init: {
       method: "POST",
       headers: appHeaders(jwt),
     },
-  );
+    operation: `GitHub App POST ${tokenPath}`,
+    retryable: true,
+    ...(dependencies.sleep ? { sleep: dependencies.sleep } : {}),
+  });
   if (!response.ok) {
     throw githubAppResponseError("installation token request", response);
   }
@@ -106,14 +119,20 @@ async function findInstallationID(
   repository: string,
   jwt: string,
   request: typeof fetch,
+  sleepDependency?: (milliseconds: number) => Promise<void>,
 ): Promise<string> {
-  const response = await request(
-    `${baseUrl}/repos/${repositoryPath(repository)}/installation`,
-    {
+  const path = `/repos/${repositoryPath(repository)}/installation`;
+  const response = await fetchWithRetry({
+    request,
+    input: `${baseUrl}${path}`,
+    init: {
       method: "GET",
       headers: appHeaders(jwt),
     },
-  );
+    operation: `GitHub App GET ${path}`,
+    retryable: true,
+    ...(sleepDependency ? { sleep: sleepDependency } : {}),
+  });
   if (!response.ok) {
     throw githubAppResponseError("installation lookup", response);
   }

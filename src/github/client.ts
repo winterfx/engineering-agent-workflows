@@ -22,17 +22,20 @@ import type {
   CheckRunAnnotation,
   CiFixProvider,
 } from "../draft-pr/provider.js";
+import { fetchWithRetry } from "./fetch-retry.js";
 
 export interface GitHubClientOptions {
   token?: string;
   baseUrl?: string;
   fetch?: typeof fetch;
+  sleep?: (milliseconds: number) => Promise<void>;
 }
 
 export class GitHubClient implements CiFixProvider {
   readonly #token: string;
   readonly #baseUrl: string;
   readonly #fetch: typeof fetch;
+  readonly #sleep: ((milliseconds: number) => Promise<void>) | undefined;
 
   constructor(options: GitHubClientOptions = {}) {
     this.#token = options.token?.trim() ?? "";
@@ -41,6 +44,7 @@ export class GitHubClient implements CiFixProvider {
       "",
     );
     this.#fetch = options.fetch ?? fetch;
+    this.#sleep = options.sleep;
   }
 
   async getIssue(repository: string, issueNumber: number): Promise<Issue> {
@@ -315,10 +319,17 @@ export class GitHubClient implements CiFixProvider {
     };
     if (this.#token) headers.Authorization = `Bearer ${this.#token}`;
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    return this.#fetch(`${this.#baseUrl}${path}`, {
-      method,
-      headers,
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    return fetchWithRetry({
+      request: this.#fetch,
+      input: `${this.#baseUrl}${path}`,
+      init: {
+        method,
+        headers,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      },
+      operation: `GitHub API ${method} ${path}`,
+      retryable: method === "GET",
+      ...(this.#sleep ? { sleep: this.#sleep } : {}),
     });
   }
 }

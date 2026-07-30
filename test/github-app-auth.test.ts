@@ -16,6 +16,34 @@ const privateKey = keyPair.privateKey.export({
 const privateKeyBase64 = Buffer.from(privateKey).toString("base64");
 
 describe("GitHub App authentication", () => {
+  it("retries transient installation token transport failures", async () => {
+    let attempts = 0;
+    const delays: number[] = [];
+    const token = await resolveGitHubToken(
+      "chaitin/agent-compose",
+      {
+        GITHUB_APP_CLIENT_ID: "Iv1.app-client",
+        GITHUB_APP_INSTALLATION_ID: "987654",
+        GITHUB_APP_PRIVATE_KEY_BASE64: privateKeyBase64,
+      },
+      {
+        fetch: (async () => {
+          attempts += 1;
+          if (attempts < 3) throw new TypeError("fetch failed");
+          return jsonResponse({ token: "installation-token" });
+        }) as typeof fetch,
+        now: () => 1_800_000_000_000,
+        sleep: async (milliseconds) => {
+          delays.push(milliseconds);
+        },
+      },
+    );
+
+    expect(token).toBe("installation-token");
+    expect(attempts).toBe(3);
+    expect(delays).toHaveLength(2);
+  });
+
   it("keeps a configured static token as a backwards-compatible override", async () => {
     const token = await resolveGitHubToken(
       "chaitin/agent-compose",
