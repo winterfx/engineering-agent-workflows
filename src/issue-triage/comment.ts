@@ -54,6 +54,11 @@ export function buildTriageComment(
 
   lines.push(
     "",
+    "### Maintainer next step",
+    "",
+    "- When this Issue is ready for implementation, a maintainer can add the `agent:ready` label. The Agent will open a Draft Pull Request and will not merge it automatically.",
+    "- Add `skip-triage` to opt out of automated triage.",
+    "",
     "_This is an automated initial assessment based on the Issue text and related candidates; no repository code was inspected._",
   );
   return lines.join("\n");

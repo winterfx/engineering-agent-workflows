@@ -206,6 +206,11 @@ describe("issue triage tool", () => {
     expect(result.proposedComment).toContain(
       "no repository code was inspected",
     );
+    expect(result.proposedComment).toContain("### Maintainer next step");
+    expect(result.proposedComment).toContain("`agent:ready` label");
+    expect(result.proposedComment).toContain("Draft Pull Request");
+    expect(result.proposedComment).toContain("will not merge it automatically");
+    expect(result.proposedComment).toContain("`skip-triage`");
     expect(issues.createdComments).toEqual([]);
   });
 

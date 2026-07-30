@@ -12,7 +12,8 @@ facts; deterministic code calculates priority, checks duplicate candidates, and
 updates managed labels plus one managed comment.
 
 Triage preserves the Issue title and human-owned labels. It never adds
-`agent:ready` or manages `area:*`. Add `skip-triage` to opt out.
+`agent:ready` or manages `area:*`. Its managed comment tells maintainers how to
+authorize a Draft PR run with `agent:ready`. Add `skip-triage` to opt out.
 
 ### Draft PR implementation
 
