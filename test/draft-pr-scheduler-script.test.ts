@@ -240,7 +240,7 @@ describe("Draft PR Scheduler script", () => {
     expect(topics).toEqual([
       "webhook.github.issues",
       "webhook.github.pull_request_review",
-      "webhook.github.check_suite",
+      "webhook.github.workflow_run",
     ]);
     expect(topics).not.toContain("webhook.github.issue_comment");
     expect(topics).not.toContain("webhook.github.pull_request_review_comment");
@@ -960,7 +960,7 @@ describe("Draft PR Scheduler script", () => {
     expect(commands).toEqual(["prepare-review"]);
   });
 
-  it("routes a completed failed check suite through CI prepare and apply", async () => {
+  it("routes a completed failed workflow run through CI prepare and apply", async () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     const commands: string[] = [];
     let agentPrompt = "";
@@ -1036,12 +1036,12 @@ describe("Draft PR Scheduler script", () => {
     });
     new vm.Script(await schedulerScript()).runInContext(context);
 
-    const result = handlers.get("webhook.github.check_suite")?.({
+    const result = handlers.get("webhook.github.workflow_run")?.({
       payload: {
         body: {
           action: "completed",
-          check_suite: {
-            id: 88001,
+          workflow_run: {
+            check_suite_id: 88001,
             head_sha: headSha,
             conclusion: "failure",
             pull_requests: [{ number: 440 }],
@@ -1077,7 +1077,7 @@ describe("Draft PR Scheduler script", () => {
     );
   });
 
-  it("ignores successful check suites without invoking a sandbox", async () => {
+  it("ignores successful workflow runs without invoking a sandbox", async () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     let calls = 0;
     const context = vm.createContext({
@@ -1102,12 +1102,12 @@ describe("Draft PR Scheduler script", () => {
     });
     new vm.Script(await schedulerScript()).runInContext(context);
 
-    const result = handlers.get("webhook.github.check_suite")?.({
+    const result = handlers.get("webhook.github.workflow_run")?.({
       payload: {
         body: {
           action: "completed",
-          check_suite: {
-            id: 88001,
+          workflow_run: {
+            check_suite_id: 88001,
             head_sha: "a".repeat(40),
             conclusion: "success",
             pull_requests: [{ number: 440 }],
@@ -1120,7 +1120,7 @@ describe("Draft PR Scheduler script", () => {
     expect(result).toEqual({
       ok: true,
       ignored: true,
-      reason: "check suite does not have a supported failure conclusion",
+      reason: "workflow run does not have a supported failure conclusion",
     });
     expect(calls).toBe(0);
   });

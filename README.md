@@ -52,7 +52,7 @@ An Agent-managed PR has two automatic fix paths:
 | `pull_request_review` with `approved` or `commented` | No           | Ignored                                            |
 | `pull_request_review_comment`                        | No           | A standalone inline comment never starts the Agent |
 | Ordinary PR `issue_comment`                          | No           | Ignored by the Draft PR workflow                   |
-| Failed `check_suite.completed`                       | Yes          | Fixes failed checks from that suite as a batch     |
+| Failed `workflow_run.completed`                      | Yes          | Fixes failed checks from that run as a batch       |
 
 For a requested-change Review:
 
@@ -143,16 +143,17 @@ GitHub permissions:
 - Issues: read and write
 - Contents: read and write for Draft PRs
 - Pull requests: read and write for Draft PRs
+- Actions: read for CI workflow completion events
 - Checks: read for CI fixes
 
 GitHub webhook events:
 
 - Issues and Issue comments
 - Pull request reviews
-- Check suites
+- Workflow runs
 
 Map them to `webhook.github.issues`, `webhook.github.issue_comment`,
-`webhook.github.pull_request_review`, and `webhook.github.check_suite`.
+`webhook.github.pull_request_review`, and `webhook.github.workflow_run`.
 Pull Request review-comment events are not required.
 
 GitHub deliveries enter through the agent-compose Webhook API. Configure the

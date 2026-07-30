@@ -1,6 +1,6 @@
 const GITHUB_ISSUE_TOPIC = "webhook.github.issues";
 const GITHUB_REVIEW_TOPIC = "webhook.github.pull_request_review";
-const GITHUB_CHECK_SUITE_TOPIC = "webhook.github.check_suite";
+const GITHUB_WORKFLOW_RUN_TOPIC = "webhook.github.workflow_run";
 const READY_LABEL = "agent:ready";
 const APPROVED_LABEL = "agent:approved";
 const WORKFLOW_TOOL_BASE64 = "__WORKFLOW_TOOL_BASE64__";
@@ -1094,7 +1094,7 @@ function handleRequestedChangesReview(event) {
   return runReviewFix(repository, pullRequestNumber, reviewId);
 }
 
-function handleCheckSuite(event) {
+function handleWorkflowRun(event) {
   const body = event?.payload?.body ?? event;
   if (!body || typeof body !== "object") {
     return { ok: true, ignored: true, reason: "missing webhook body" };
@@ -1106,7 +1106,7 @@ function handleCheckSuite(event) {
       reason: "unsupported action: " + body.action,
     };
   }
-  const conclusion = String(body.check_suite?.conclusion || "");
+  const conclusion = String(body.workflow_run?.conclusion || "");
   if (
     !["action_required", "failure", "startup_failure", "timed_out"].includes(
       conclusion,
@@ -1115,7 +1115,7 @@ function handleCheckSuite(event) {
     return {
       ok: true,
       ignored: true,
-      reason: "check suite does not have a supported failure conclusion",
+      reason: "workflow run does not have a supported failure conclusion",
     };
   }
   const repository = body.repository?.full_name;
@@ -1125,18 +1125,22 @@ function handleCheckSuite(event) {
   ) {
     return { ok: true, ignored: true, reason: "invalid repository.full_name" };
   }
-  const checkSuiteId = body.check_suite?.id;
-  const headSha = String(body.check_suite?.head_sha || "");
+  const checkSuiteId = body.workflow_run?.check_suite_id;
+  const headSha = String(body.workflow_run?.head_sha || "");
   if (!Number.isSafeInteger(checkSuiteId) || checkSuiteId <= 0) {
-    return { ok: true, ignored: true, reason: "invalid check_suite.id" };
+    return {
+      ok: true,
+      ignored: true,
+      reason: "invalid workflow_run.check_suite_id",
+    };
   }
   if (!/^[0-9a-f]{40}$/.test(headSha)) {
-    return { ok: true, ignored: true, reason: "invalid check_suite.head_sha" };
+    return { ok: true, ignored: true, reason: "invalid workflow_run.head_sha" };
   }
   const pullRequestNumbers = [
     ...new Set(
-      (Array.isArray(body.check_suite?.pull_requests)
-        ? body.check_suite.pull_requests
+      (Array.isArray(body.workflow_run?.pull_requests)
+        ? body.workflow_run.pull_requests
         : []
       )
         .map((pullRequest) => pullRequest?.number)
@@ -1147,7 +1151,7 @@ function handleCheckSuite(event) {
     return {
       ok: true,
       ignored: true,
-      reason: "check suite is not associated with a Pull Request",
+      reason: "workflow run is not associated with a Pull Request",
     };
   }
   return {
@@ -1167,7 +1171,7 @@ scheduler.on(
   handleRequestedChangesReview,
 );
 scheduler.on(
-  GITHUB_CHECK_SUITE_TOPIC,
+  GITHUB_WORKFLOW_RUN_TOPIC,
   "github-draft-pr-ci-fix-v1",
-  handleCheckSuite,
+  handleWorkflowRun,
 );
