@@ -1,0 +1,4522 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="为什么 AI 时代的 Agent 产品必须能够自举，以及 engineering-agent-workflows 如何用 agent-compose 把 Issue 变成可评审的 Draft PR。"
+    />
+    <title>让 Agent 参与构建自己 · engineering-agent-workflows</title>
+    <style>
+      :root {
+        --paper: #f5f0e6;
+        --paper-deep: #e9e0cf;
+        --ink: #24211c;
+        --muted: #756e62;
+        --line: rgba(36, 33, 28, 0.2);
+        --line-strong: rgba(36, 33, 28, 0.48);
+        --rust: #b55237;
+        --rust-soft: #e9b8a5;
+        --blue: #57717b;
+        --blue-soft: #bfd0d3;
+        --sage: #71806a;
+        --sage-soft: #c8d1bf;
+        --gold: #c29c49;
+        --display: Iowan Old Style, Palatino Linotype, Georgia, serif;
+        --sans:
+          Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        min-width: 320px;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        color: var(--ink);
+        background:
+          radial-gradient(
+            circle at 14% 5%,
+            rgba(255, 255, 255, 0.8),
+            transparent 29rem
+          ),
+          linear-gradient(rgba(36, 33, 28, 0.018) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(36, 33, 28, 0.018) 1px, transparent 1px),
+          var(--paper);
+        background-size:
+          auto,
+          24px 24px,
+          24px 24px,
+          auto;
+        font-family: var(--sans);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      button {
+        font: inherit;
+      }
+
+      .shell {
+        width: min(1180px, calc(100% - 36px));
+        margin: 0 auto;
+      }
+
+      .topbar {
+        min-height: 64px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-family: var(--display);
+        font-size: 17px;
+      }
+
+      .brand-mark {
+        width: 31px;
+        height: 31px;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--line-strong);
+        border-radius: 51% 49% 46% 54% / 48% 55% 45% 52%;
+        transform: rotate(-4deg);
+      }
+
+      .brand-mark svg {
+        width: 17px;
+      }
+
+      .top-note {
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 10px;
+      }
+
+      .top-nav {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .top-nav a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .top-nav a:hover,
+      .top-nav a:focus-visible {
+        color: var(--ink);
+      }
+
+      .blog-hero {
+        min-height: 660px;
+        display: grid;
+        grid-template-columns: minmax(0, 1.25fr) minmax(300px, 0.75fr);
+        gap: 42px;
+        align-items: center;
+        padding: 84px 0 90px;
+      }
+
+      .blog-eyebrow {
+        margin-bottom: 22px;
+        color: var(--rust);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.17em;
+        text-transform: uppercase;
+      }
+
+      .blog-hero h1 {
+        max-width: none;
+        margin-bottom: 26px;
+        font-size: clamp(50px, 5.2vw, 72px);
+        white-space: nowrap;
+      }
+
+      .blog-lede {
+        max-width: 590px;
+        margin-bottom: 36px;
+        color: var(--muted);
+        font-family: var(--display);
+        font-size: 19px;
+        line-height: 1.65;
+      }
+
+      .self-build-line {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 9px;
+        margin: -8px 0 22px;
+        color: var(--rust);
+        font-family: var(--mono);
+        font-size: 10px;
+        letter-spacing: 0.04em;
+      }
+
+      .self-build-line span:nth-child(2) {
+        color: var(--muted);
+      }
+
+      .word-highlight {
+        display: inline-block;
+        padding: 0.02em 0.16em 0.06em;
+        border-radius: 0.16em 0.1em 0.18em 0.12em;
+        color: var(--ink);
+        box-decoration-break: clone;
+        -webkit-box-decoration-break: clone;
+      }
+
+      .word-highlight.ai-native {
+        background: rgba(242, 216, 121, 0.82);
+        box-shadow: inset 0 -0.08em 0 rgba(194, 156, 73, 0.28);
+        transform: rotate(-0.8deg);
+      }
+
+      .word-highlight.yaml-word {
+        background: rgba(191, 208, 211, 0.88);
+        box-shadow: inset 0 -0.08em 0 rgba(87, 113, 123, 0.2);
+        transform: rotate(0.7deg);
+      }
+
+      .customer-zero {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        max-width: 540px;
+        padding-top: 20px;
+        border-top: 1px solid var(--line-strong);
+      }
+
+      .customer-zero-mark {
+        color: var(--rust);
+        font-family: var(--display);
+        font-size: 44px;
+        line-height: 0.7;
+      }
+
+      .customer-zero strong {
+        display: block;
+        margin-bottom: 4px;
+        font-family: var(--display);
+        font-size: 20px;
+        font-weight: 400;
+      }
+
+      .customer-zero small {
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .bootstrap-loop {
+        position: relative;
+        min-height: 440px;
+      }
+
+      .loop-orbit {
+        position: absolute;
+        inset: 35px 20px 30px;
+        width: calc(100% - 40px);
+        height: calc(100% - 65px);
+        overflow: visible;
+      }
+
+      .loop-orbit path {
+        fill: none;
+        stroke: var(--line-strong);
+        stroke-width: 1.2;
+      }
+
+      .loop-signal {
+        filter: drop-shadow(0 0 4px rgba(181, 82, 55, 0.3));
+      }
+
+      .loop-node {
+        position: absolute;
+        width: 168px;
+        min-height: 108px;
+        display: grid;
+        place-items: center;
+        padding: 19px;
+        border: 1px solid var(--ink);
+        text-align: center;
+        box-shadow: 6px 7px 0 rgba(36, 33, 28, 0.07);
+      }
+
+      .loop-node strong {
+        display: block;
+        font-family: var(--display);
+        font-size: 22px;
+        font-weight: 400;
+      }
+
+      .loop-node small {
+        display: block;
+        margin-top: 7px;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 8px;
+      }
+
+      .loop-node.product {
+        top: 8px;
+        left: 50%;
+        border-radius: 51% 49% 45% 55% / 54% 46% 52% 48%;
+        background: var(--blue-soft);
+        transform: translateX(-50%) rotate(-1deg);
+      }
+
+      .loop-node.developer {
+        bottom: 7px;
+        left: 5px;
+        border-radius: 48% 52% 54% 46% / 47% 53% 46% 54%;
+        background: var(--paper);
+        transform: rotate(-2deg);
+      }
+
+      .loop-node.agent {
+        right: 4px;
+        bottom: 7px;
+        border-radius: 54% 46% 48% 52% / 46% 54% 51% 49%;
+        background: var(--rust-soft);
+        transform: rotate(2deg);
+      }
+
+      .loop-center {
+        position: absolute;
+        top: 51%;
+        left: 50%;
+        color: var(--sage);
+        font-family: var(--mono);
+        font-size: 9px;
+        text-align: center;
+        transform: translate(-50%, -50%) rotate(-4deg);
+      }
+
+      .story-intro {
+        padding-top: 85px;
+        border-top: 1px solid var(--line);
+      }
+
+      .story-head h2 {
+        max-width: none;
+        margin: 0;
+        font-family: var(--display);
+        font-size: clamp(40px, 4.5vw, 60px);
+        font-weight: 400;
+        line-height: 1.02;
+        letter-spacing: -0.048em;
+        white-space: nowrap;
+      }
+
+      .tech-section {
+        display: grid;
+        grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+        gap: 70px;
+        align-items: center;
+        padding: 110px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .section-label {
+        margin-bottom: 18px;
+        color: var(--rust);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.17em;
+        text-transform: uppercase;
+      }
+
+      .tech-copy h2,
+      .demo-cta h2 {
+        margin-bottom: 20px;
+        font-family: var(--display);
+        font-size: clamp(40px, 4.8vw, 62px);
+        font-weight: 400;
+        line-height: 1.04;
+        letter-spacing: -0.04em;
+      }
+
+      .tech-copy p {
+        max-width: 480px;
+        margin-bottom: 0;
+        color: var(--muted);
+        font-family: var(--display);
+        font-size: 17px;
+        line-height: 1.7;
+      }
+
+      .tech-board {
+        overflow: hidden;
+        border: 1px solid var(--line-strong);
+        border-radius: 14px 10px 15px 11px;
+        background: rgba(255, 255, 255, 0.24);
+      }
+
+      .tech-board-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 9px;
+      }
+
+      .tech-board-body {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(210px, 0.9fr);
+      }
+
+      .yaml-static {
+        margin: 0;
+        padding: 28px;
+        border-right: 1px solid var(--line);
+        color: var(--ink);
+        font-family: var(--mono);
+        font-size: 10px;
+        line-height: 1.72;
+        white-space: pre-wrap;
+      }
+
+      .yaml-static .yaml-key {
+        color: var(--blue);
+      }
+
+      .yaml-static .yaml-value {
+        color: var(--rust);
+      }
+
+      .tech-states {
+        display: grid;
+        align-content: center;
+        gap: 9px;
+        padding: 25px 20px;
+      }
+
+      .tech-state {
+        display: grid;
+        grid-template-columns: 10px 1fr auto;
+        gap: 9px;
+        align-items: center;
+        padding: 10px 11px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        color: var(--muted);
+        background: rgba(245, 240, 230, 0.55);
+        font-family: var(--mono);
+        font-size: 8px;
+        opacity: 0.48;
+        transform: translateX(9px);
+        transition:
+          opacity 300ms ease,
+          transform 300ms ease,
+          border-color 300ms ease,
+          background 300ms ease;
+      }
+
+      .tech-state-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--muted);
+      }
+
+      .tech-state small {
+        color: var(--muted);
+        font-size: 7px;
+      }
+
+      .tech-section.is-lit .tech-state {
+        opacity: 1;
+        transform: translateX(0);
+        border-color: rgba(113, 128, 106, 0.5);
+        background: rgba(200, 209, 191, 0.18);
+      }
+
+      .tech-section.is-lit .tech-state-dot {
+        background: var(--sage);
+        box-shadow: 0 0 0 3px rgba(113, 128, 106, 0.12);
+      }
+
+      .tech-section.is-lit .tech-state:nth-child(2) {
+        transition-delay: 220ms;
+      }
+
+      .tech-section.is-lit .tech-state:nth-child(3) {
+        transition-delay: 440ms;
+      }
+
+      .tech-section.is-lit .tech-state:nth-child(4) {
+        transition-delay: 660ms;
+      }
+
+      .demo-cta {
+        position: relative;
+        overflow: hidden;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 40px;
+        align-items: center;
+        margin-bottom: 80px;
+        padding: 58px 62px;
+        border-radius: 18px 12px 20px 13px;
+        color: var(--paper);
+        background: var(--ink);
+      }
+
+      .demo-cta::after {
+        content: "";
+        position: absolute;
+        top: -110px;
+        right: 12%;
+        width: 300px;
+        height: 300px;
+        border: 1px solid rgba(245, 240, 230, 0.12);
+        border-radius: 50%;
+      }
+
+      .demo-cta .section-label {
+        color: var(--rust-soft);
+      }
+
+      .demo-cta h2 {
+        max-width: 740px;
+        margin-bottom: 14px;
+      }
+
+      .demo-cta p {
+        max-width: 620px;
+        margin: 0;
+        color: rgba(245, 240, 230, 0.68);
+        font-family: var(--display);
+        font-size: 16px;
+        line-height: 1.55;
+      }
+
+      .demo-actions {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+        min-width: 190px;
+      }
+
+      .demo-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 16px;
+        border: 1px solid rgba(245, 240, 230, 0.35);
+        border-radius: 8px 6px 9px 7px;
+        color: var(--paper);
+        background: transparent;
+        font-size: 11px;
+        text-decoration: none;
+      }
+
+      .demo-button.primary {
+        color: var(--ink);
+        border-color: var(--paper);
+        background: var(--paper);
+      }
+
+      .demo-button:hover,
+      .demo-button:focus-visible {
+        transform: translateY(-2px);
+      }
+
+      .story {
+        padding: 42px 0 30px;
+      }
+
+      .story-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 28px;
+        align-items: end;
+        margin-bottom: 25px;
+      }
+
+      .kicker {
+        margin-bottom: 10px;
+        color: var(--rust);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.17em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        max-width: 790px;
+        margin-bottom: 0;
+        font-family: var(--display);
+        font-size: clamp(42px, 5.4vw, 70px);
+        font-weight: 400;
+        line-height: 1.02;
+        letter-spacing: -0.048em;
+      }
+
+      .chapter-count {
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 11px;
+      }
+
+      .story-frame {
+        position: relative;
+        min-height: 620px;
+        overflow: hidden;
+        border: 1px solid var(--line-strong);
+        border-radius: 18px 12px 20px 13px;
+        background: rgba(255, 255, 255, 0.22);
+        box-shadow: 12px 14px 0 rgba(36, 33, 28, 0.05);
+      }
+
+      .story-frame::before {
+        content: "";
+        position: absolute;
+        inset: 10px 13px 14px 9px;
+        pointer-events: none;
+        border: 1px solid rgba(36, 33, 28, 0.06);
+        border-radius: 12px 16px 10px 15px;
+      }
+
+      .progress {
+        position: absolute;
+        z-index: 20;
+        top: 0;
+        left: 0;
+        width: var(--progress, 12.5%);
+        height: 3px;
+        background: var(--rust);
+        transition: width 500ms ease;
+      }
+
+      .scene {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1.4fr) minmax(290px, 0.6fr);
+        opacity: 0;
+        visibility: hidden;
+        transform: translateX(24px);
+        transition:
+          opacity 450ms ease,
+          transform 580ms cubic-bezier(0.22, 1, 0.36, 1),
+          visibility 0s 580ms;
+      }
+
+      .scene.is-active {
+        z-index: 3;
+        opacity: 1;
+        visibility: visible;
+        transform: translateX(0);
+        transition-delay: 0s;
+      }
+
+      .scene-visual {
+        position: relative;
+        min-height: 550px;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+        padding: 54px 42px 82px;
+        border-right: 1px solid var(--line);
+      }
+
+      .scene-copy {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: 48px 38px 88px;
+      }
+
+      .scene-number {
+        margin-bottom: 22px;
+        color: var(--rust);
+        font-family: var(--mono);
+        font-size: 10px;
+        letter-spacing: 0.1em;
+      }
+
+      .scene-copy h2 {
+        margin-bottom: 18px;
+        font-family: var(--display);
+        font-size: clamp(30px, 3.3vw, 46px);
+        font-weight: 400;
+        line-height: 1.05;
+        letter-spacing: -0.035em;
+      }
+
+      .scene-copy p {
+        margin-bottom: 0;
+        color: var(--muted);
+        font-family: var(--display);
+        font-size: 16px;
+        line-height: 1.72;
+      }
+
+      .scene-copy code {
+        color: var(--rust);
+        font-family: var(--mono);
+        font-size: 0.75em;
+      }
+
+      .caption {
+        margin-top: 26px;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 9px;
+        line-height: 1.6;
+      }
+
+      .controls {
+        position: absolute;
+        z-index: 30;
+        right: 28px;
+        bottom: 23px;
+        left: 28px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+      }
+
+      .chapter-dots,
+      .playback {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+
+      .chapter-dot {
+        width: 23px;
+        height: 23px;
+        padding: 0;
+        border: 0;
+        color: var(--muted);
+        background: transparent;
+        font-family: var(--mono);
+        font-size: 9px;
+        cursor: pointer;
+      }
+
+      .chapter-dot::after {
+        content: "";
+        display: block;
+        width: 14px;
+        height: 1px;
+        margin: 3px auto 0;
+        background: var(--line-strong);
+        transition:
+          width 250ms ease,
+          background 250ms ease;
+      }
+
+      .chapter-dot[aria-current="step"] {
+        color: var(--rust);
+      }
+
+      .chapter-dot[aria-current="step"]::after {
+        width: 22px;
+        height: 2px;
+        background: var(--rust);
+      }
+
+      .control-button {
+        min-height: 34px;
+        padding: 7px 11px;
+        border: 1px solid var(--line-strong);
+        border-radius: 7px 9px 6px 10px;
+        color: var(--muted);
+        background: var(--paper);
+        font-size: 10px;
+        cursor: pointer;
+      }
+
+      .control-button:hover,
+      .control-button:focus-visible {
+        color: var(--ink);
+        background: white;
+      }
+
+      .control-button.primary {
+        color: var(--paper);
+        border-color: var(--ink);
+        background: var(--ink);
+      }
+
+      .control-button:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+
+      /* GitHub-like product story */
+      .github-window {
+        position: relative;
+        width: min(720px, 100%);
+        min-height: 420px;
+        overflow: hidden;
+        border: 1px solid var(--line-strong);
+        border-radius: 10px;
+        background: #f7f8fa;
+        box-shadow: 10px 12px 0 rgba(36, 33, 28, 0.07);
+        color: #24292f;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      .gh-browser-bar {
+        height: 31px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 12px;
+        border-bottom: 1px solid #d0d7de;
+        background: #eef0f3;
+      }
+
+      .gh-browser-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #8c959f;
+      }
+
+      .gh-address {
+        min-width: 0;
+        flex: 1;
+        margin-left: 7px;
+        padding: 4px 10px;
+        overflow: hidden;
+        border: 1px solid #d0d7de;
+        border-radius: 5px;
+        background: #fff;
+        color: #57606a;
+        font-size: 8px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .gh-header {
+        height: 47px;
+        display: flex;
+        align-items: center;
+        gap: 13px;
+        padding: 0 16px;
+        color: #fff;
+        background: #24292f;
+      }
+
+      .gh-logo {
+        width: 24px;
+        height: 24px;
+        display: grid;
+        place-items: center;
+        border: 1px solid rgba(255, 255, 255, 0.65);
+        border-radius: 50%;
+        font-family: var(--display);
+        font-size: 12px;
+      }
+
+      .gh-search {
+        width: 170px;
+        padding: 6px 9px;
+        border: 1px solid #57606a;
+        border-radius: 5px;
+        color: #8c959f;
+        font-size: 8px;
+      }
+
+      .gh-header-links {
+        display: flex;
+        gap: 12px;
+        font-size: 8px;
+        font-weight: 600;
+      }
+
+      .gh-repo-bar {
+        padding: 14px 18px 0;
+        border-bottom: 1px solid #d8dee4;
+        background: #f6f8fa;
+      }
+
+      .gh-repo-name {
+        margin-bottom: 13px;
+        color: #0969da;
+        font-size: 12px;
+      }
+
+      .gh-repo-name strong {
+        font-weight: 600;
+      }
+
+      .gh-tabs {
+        display: flex;
+        gap: 17px;
+        color: #57606a;
+        font-size: 8px;
+      }
+
+      .gh-tab {
+        padding-bottom: 9px;
+        border-bottom: 2px solid transparent;
+      }
+
+      .gh-tab.active {
+        color: #24292f;
+        border-color: #fd8c73;
+        font-weight: 600;
+      }
+
+      .gh-main {
+        padding: 18px;
+      }
+
+      .gh-form-label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 9px;
+        font-weight: 600;
+      }
+
+      .gh-input,
+      .gh-textarea {
+        width: 100%;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        background: #fff;
+        color: #24292f;
+        font-size: 10px;
+      }
+
+      .gh-input {
+        min-height: 36px;
+        padding: 10px 11px;
+      }
+
+      .gh-textarea {
+        min-height: 146px;
+        margin-top: 13px;
+        padding: 12px;
+        line-height: 1.6;
+      }
+
+      .gh-textarea-toolbar {
+        display: flex;
+        gap: 11px;
+        margin-bottom: 10px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #d8dee4;
+        color: #57606a;
+        font-family: var(--mono);
+        font-size: 8px;
+      }
+
+      .gh-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 12px;
+      }
+
+      .gh-button {
+        padding: 7px 12px;
+        border: 1px solid rgba(27, 31, 36, 0.15);
+        border-radius: 6px;
+        background: #f6f8fa;
+        color: #24292f;
+        font-size: 8px;
+        font-weight: 600;
+      }
+
+      .gh-button.green {
+        color: #fff;
+        background: #1f883d;
+      }
+
+      .gh-button.purple {
+        color: #fff;
+        background: #8250df;
+      }
+
+      .gh-cursor {
+        position: absolute;
+        z-index: 8;
+        width: 0;
+        height: 0;
+        border-top: 7px solid transparent;
+        border-bottom: 7px solid transparent;
+        border-left: 13px solid #24292f;
+        filter: drop-shadow(1px 1px 0 white);
+        opacity: 0;
+        transform: rotate(-35deg);
+      }
+
+      .scene.is-active .issue-form .gh-cursor {
+        animation: submit-cursor 4.8s 300ms ease-in-out forwards;
+      }
+
+      .issue-title-typed,
+      .issue-body-typed {
+        display: inline-block;
+        overflow: hidden;
+        white-space: nowrap;
+      }
+
+      .issue-title-typed {
+        max-width: 0;
+      }
+
+      .issue-body-typed {
+        max-width: 0;
+      }
+
+      .scene.is-active .issue-title-typed {
+        animation: type-title 1.15s 550ms steps(24, end) forwards;
+      }
+
+      .scene.is-active .issue-body-typed {
+        animation: type-body 1.55s 1.85s steps(32, end) forwards;
+      }
+
+      .scene.is-active .issue-form .gh-button.green {
+        animation: submit-flash 420ms 4.5s ease-out both;
+      }
+
+      .issue-page-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        padding-bottom: 14px;
+        border-bottom: 1px solid #d8dee4;
+      }
+
+      .issue-page-title {
+        font-size: 19px;
+        font-weight: 400;
+      }
+
+      .issue-number-muted {
+        color: #57606a;
+      }
+
+      .issue-state {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        margin-top: 8px;
+        padding: 5px 9px;
+        border-radius: 999px;
+        color: #fff;
+        background: #1f883d;
+        font-size: 8px;
+      }
+
+      .issue-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 160px;
+        gap: 16px;
+        padding-top: 16px;
+      }
+
+      .gh-comment {
+        overflow: hidden;
+        border: 1px solid #d0d7de;
+        border-radius: 7px;
+        background: #fff;
+      }
+
+      .gh-comment-head {
+        padding: 9px 11px;
+        border-bottom: 1px solid #d0d7de;
+        background: #f6f8fa;
+        color: #57606a;
+        font-size: 8px;
+      }
+
+      .gh-comment-body {
+        min-height: 94px;
+        padding: 13px;
+        font-size: 9px;
+        line-height: 1.65;
+      }
+
+      .gh-comment.agent-comment {
+        margin-top: 12px;
+        opacity: 0;
+        transform: translateY(12px);
+      }
+
+      .scene.is-active .gh-comment.agent-comment {
+        animation: comment-arrive 520ms 1.7s ease-out forwards;
+      }
+
+      .gh-sidebar-block {
+        padding: 9px 0 12px;
+        border-bottom: 1px solid #d8dee4;
+      }
+
+      .gh-sidebar-label {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 8px;
+        color: #57606a;
+        font-size: 8px;
+        font-weight: 600;
+      }
+
+      .gh-labels {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+      }
+
+      .gh-label {
+        padding: 3px 7px;
+        border-radius: 999px;
+        background: #d0d7de;
+        font-size: 7px;
+        font-weight: 600;
+        opacity: 0;
+        transform: scale(0.8);
+      }
+
+      .gh-label.bug {
+        color: #82071e;
+        background: #ffebe9;
+      }
+
+      .gh-label.priority {
+        color: #633c01;
+        background: #fff8c5;
+      }
+
+      .gh-label.done {
+        color: #0a3069;
+        background: #ddf4ff;
+      }
+
+      .gh-label.ready,
+      .gh-label.running {
+        color: #fff;
+        background: #8250df;
+      }
+
+      .scene.is-active .gh-label {
+        animation: label-arrive 320ms 850ms ease-out forwards;
+      }
+
+      .scene.is-active .gh-label:nth-child(2) {
+        animation-delay: 1.12s;
+      }
+
+      .scene.is-active .gh-label:nth-child(3) {
+        animation-delay: 1.38s;
+      }
+
+      .agent-compose-peek {
+        position: absolute;
+        top: 105px;
+        right: -8px;
+        z-index: 7;
+        width: 168px;
+        padding: 14px;
+        border: 1px solid var(--rust);
+        border-radius: 8px 6px 9px 7px;
+        background: var(--paper);
+        box-shadow: 6px 7px 0 rgba(36, 33, 28, 0.07);
+        color: var(--ink);
+        font-family: var(--mono);
+        font-size: 8px;
+        line-height: 1.65;
+        opacity: 0;
+        transform: translateX(28px) rotate(2deg);
+      }
+
+      .agent-compose-peek strong {
+        display: block;
+        margin-bottom: 7px;
+        color: var(--rust);
+        font-size: 9px;
+      }
+
+      .scene.is-active .agent-compose-peek {
+        animation: peek-in 520ms 420ms ease-out forwards;
+      }
+
+      .ac-pip {
+        position: absolute;
+        top: 72px;
+        right: 28px;
+        z-index: 14;
+        width: 272px;
+        overflow: hidden;
+        border: 1px solid rgba(245, 240, 230, 0.45);
+        border-radius: 10px 7px 11px 8px;
+        background: #20231f;
+        box-shadow: 9px 11px 0 rgba(36, 33, 28, 0.16);
+        color: #f5f0e6;
+        font-family: var(--mono);
+        opacity: 0;
+        transform: translateY(12px) scale(0.94) rotate(1deg);
+      }
+
+      .scene.is-active .ac-pip {
+        animation: ac-pip-in 460ms 350ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      }
+
+      .scene.is-active .ac-pip.after-submit {
+        animation-delay: 4.55s;
+      }
+
+      .ac-pip-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(245, 240, 230, 0.16);
+        font-size: 8px;
+        letter-spacing: 0.04em;
+      }
+
+      .ac-pip-brand {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+
+      .ac-pip-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--sage-soft);
+        box-shadow: 0 0 0 3px rgba(200, 209, 191, 0.13);
+      }
+
+      .ac-pip-mode {
+        padding: 3px 6px;
+        border: 1px solid rgba(245, 240, 230, 0.22);
+        border-radius: 999px;
+        color: var(--rust-soft);
+        font-size: 7px;
+      }
+
+      .ac-pip.waiting .ac-pip-dot,
+      .ac-pip.human-only .ac-pip-dot {
+        background: var(--gold);
+        box-shadow: 0 0 0 3px rgba(194, 156, 73, 0.14);
+      }
+
+      .ac-pip.waiting .ac-pip-mode,
+      .ac-pip.human-only .ac-pip-mode {
+        color: #ead49d;
+      }
+
+      .ac-pip-body {
+        padding: 11px 12px 12px;
+      }
+
+      .ac-pip-event {
+        margin-bottom: 10px;
+        color: rgba(245, 240, 230, 0.7);
+        font-size: 7px;
+        line-height: 1.5;
+      }
+
+      .ac-pip-event strong {
+        color: #f5f0e6;
+        font-weight: 500;
+      }
+
+      .ac-pipeline {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 4px;
+        margin-bottom: 10px;
+      }
+
+      .ac-step {
+        position: relative;
+        padding: 7px 3px;
+        border: 1px solid rgba(245, 240, 230, 0.14);
+        border-radius: 4px;
+        color: rgba(245, 240, 230, 0.35);
+        font-size: 6px;
+        text-align: center;
+      }
+
+      .ac-step.is-on {
+        color: #f5f0e6;
+        border-color: rgba(233, 184, 165, 0.65);
+        background: rgba(181, 82, 55, 0.2);
+      }
+
+      .ac-step.is-done {
+        color: #f5f0e6;
+        border-color: rgba(200, 209, 191, 0.55);
+        background: rgba(113, 128, 106, 0.2);
+      }
+
+      .ac-step.is-on::after {
+        content: "";
+        position: absolute;
+        top: -3px;
+        right: -3px;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--rust-soft);
+        animation: ac-step-pulse 1.2s ease-in-out infinite;
+      }
+
+      .ac-pip-log {
+        min-height: 29px;
+        padding: 7px 8px;
+        border-left: 2px solid var(--rust-soft);
+        background: rgba(245, 240, 230, 0.06);
+        color: rgba(245, 240, 230, 0.74);
+        font-size: 7px;
+        line-height: 1.55;
+      }
+
+      .ac-pip.waiting .ac-pip-log,
+      .ac-pip.human-only .ac-pip-log {
+        border-left-color: var(--gold);
+      }
+
+      .ac-pip-log strong {
+        color: #f5f0e6;
+        font-weight: 500;
+      }
+
+      @keyframes ac-pip-in {
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1) rotate(1deg);
+        }
+      }
+
+      @keyframes ac-step-pulse {
+        0%,
+        100% {
+          opacity: 0.45;
+          transform: scale(0.8);
+        }
+        50% {
+          opacity: 1;
+          transform: scale(1.25);
+        }
+      }
+
+      .label-menu {
+        position: absolute;
+        top: 200px;
+        right: 38px;
+        z-index: 8;
+        width: 190px;
+        overflow: hidden;
+        border: 1px solid #d0d7de;
+        border-radius: 7px;
+        background: #fff;
+        box-shadow: 0 8px 24px rgba(36, 33, 28, 0.16);
+        opacity: 0;
+        transform: translateY(-8px);
+      }
+
+      .scene.is-active .label-menu {
+        animation: menu-open 380ms 450ms ease-out forwards;
+      }
+
+      .label-menu-head {
+        padding: 10px 12px;
+        border-bottom: 1px solid #d8dee4;
+        font-size: 8px;
+        font-weight: 600;
+      }
+
+      .label-menu-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-bottom: 1px solid #f0f1f2;
+        font-size: 8px;
+      }
+
+      .label-menu-item.ready-item {
+        background: #f6f8fa;
+      }
+
+      .label-swatch {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #8250df;
+      }
+
+      .scene.is-active .label-authorize .gh-cursor {
+        animation: label-cursor 2s 800ms ease-in-out forwards;
+      }
+
+      .work-progress {
+        display: grid;
+        gap: 9px;
+        margin-top: 12px;
+      }
+
+      .work-progress-row {
+        display: grid;
+        grid-template-columns: 18px 1fr auto;
+        gap: 9px;
+        align-items: center;
+        padding: 9px 11px;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        background: #fff;
+        font-size: 8px;
+        opacity: 0;
+        transform: translateX(-10px);
+      }
+
+      .work-progress-row::before {
+        content: "✓";
+        width: 17px;
+        height: 17px;
+        display: grid;
+        place-items: center;
+        border: 1px solid #1a7f37;
+        border-radius: 50%;
+        color: #1a7f37;
+      }
+
+      .work-progress-row small {
+        color: #57606a;
+      }
+
+      .scene.is-active .work-progress-row {
+        animation: work-row 380ms 600ms ease-out forwards;
+      }
+
+      .scene.is-active .work-progress-row:nth-child(2) {
+        animation-delay: 1.15s;
+      }
+
+      .scene.is-active .work-progress-row:nth-child(3) {
+        animation-delay: 1.7s;
+      }
+
+      .scene.is-active .work-progress-row:nth-child(4) {
+        animation-delay: 2.25s;
+      }
+
+      .pr-title-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        padding-bottom: 14px;
+        border-bottom: 1px solid #d8dee4;
+      }
+
+      .pr-title {
+        font-size: 18px;
+        font-weight: 400;
+      }
+
+      .draft-badge {
+        display: inline-block;
+        margin-top: 8px;
+        padding: 5px 9px;
+        border-radius: 999px;
+        color: #fff;
+        background: #6e7781;
+        font-size: 8px;
+      }
+
+      .pr-summary-grid {
+        display: grid;
+        grid-template-columns: 1fr 170px;
+        gap: 15px;
+        padding-top: 15px;
+      }
+
+      .pr-card {
+        padding: 13px;
+        border: 1px solid #d0d7de;
+        border-radius: 7px;
+        background: #fff;
+        font-size: 8px;
+        line-height: 1.7;
+      }
+
+      .pr-card strong {
+        display: block;
+        margin-bottom: 7px;
+        font-size: 9px;
+      }
+
+      .diff-stat {
+        display: flex;
+        gap: 5px;
+        margin-top: 9px;
+      }
+
+      .diff-stat span {
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        background: #2da44e;
+      }
+
+      .diff-stat span.minus {
+        background: #cf222e;
+      }
+
+      .check-row {
+        display: grid;
+        grid-template-columns: 20px 1fr auto;
+        gap: 9px;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid #d8dee4;
+        font-size: 8px;
+      }
+
+      .check-icon {
+        width: 18px;
+        height: 18px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        color: #fff;
+        background: #cf222e;
+        font-size: 9px;
+      }
+
+      .check-icon.ok {
+        background: #1a7f37;
+      }
+
+      .check-row small {
+        color: #57606a;
+      }
+
+      .fix-commit {
+        margin-top: 12px;
+        padding: 10px 12px;
+        border-left: 3px solid #8250df;
+        background: #f6f8fa;
+        font-size: 8px;
+        opacity: 0;
+        transform: translateY(8px);
+      }
+
+      .scene.is-active .fix-commit {
+        animation: comment-arrive 420ms 1.25s ease-out forwards;
+      }
+
+      .merge-box {
+        margin-top: 14px;
+        padding: 14px;
+        border: 1px solid #d0d7de;
+        border-radius: 7px;
+        background: #fff;
+      }
+
+      .merge-box-head {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 12px;
+        font-size: 9px;
+        font-weight: 600;
+      }
+
+      .merge-check {
+        width: 22px;
+        height: 22px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        color: #fff;
+        background: #1a7f37;
+      }
+
+      .human-only-note {
+        position: absolute;
+        right: 45px;
+        bottom: 84px;
+        z-index: 7;
+        padding: 11px 13px;
+        border: 1px solid var(--rust);
+        border-radius: 8px 6px 9px 7px;
+        background: var(--paper);
+        color: var(--rust);
+        font-family: var(--mono);
+        font-size: 8px;
+        opacity: 0;
+        transform: rotate(3deg) translateY(8px);
+      }
+
+      .scene.is-active .human-only-note {
+        animation: comment-arrive 420ms 1.1s ease-out forwards;
+      }
+
+      @keyframes submit-cursor {
+        0% {
+          top: 162px;
+          left: 260px;
+          opacity: 0;
+        }
+        8%,
+        92% {
+          opacity: 1;
+        }
+        33% {
+          top: 162px;
+          left: 465px;
+        }
+        47% {
+          top: 255px;
+          left: 250px;
+        }
+        76% {
+          top: 330px;
+          left: 420px;
+        }
+        100% {
+          top: 385px;
+          left: 615px;
+          opacity: 1;
+        }
+      }
+
+      @keyframes type-title {
+        to {
+          max-width: 480px;
+        }
+      }
+
+      @keyframes type-body {
+        to {
+          max-width: 520px;
+        }
+      }
+
+      @keyframes submit-flash {
+        0% {
+          transform: scale(1);
+        }
+        50% {
+          transform: scale(0.94);
+          box-shadow: 0 0 0 4px rgba(31, 136, 61, 0.2);
+        }
+        100% {
+          transform: scale(1);
+        }
+      }
+
+      @keyframes comment-arrive {
+        to {
+          opacity: 1;
+          transform: translateY(0) rotate(0);
+        }
+      }
+
+      @keyframes label-arrive {
+        to {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+
+      @keyframes peek-in {
+        to {
+          opacity: 1;
+          transform: translateX(0) rotate(2deg);
+        }
+      }
+
+      @keyframes menu-open {
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes label-cursor {
+        0% {
+          top: 178px;
+          right: 80px;
+          opacity: 0;
+        }
+        25%,
+        90% {
+          opacity: 1;
+        }
+        100% {
+          top: 287px;
+          right: 151px;
+          opacity: 1;
+        }
+      }
+
+      @keyframes work-row {
+        to {
+          opacity: 1;
+          transform: translateX(0);
+        }
+      }
+
+      /* Scene 1: the YAML is written */
+      .desk {
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(108deg, transparent 68%, rgba(36, 33, 28, 0.035)),
+          repeating-linear-gradient(
+            0deg,
+            transparent 0 43px,
+            rgba(36, 33, 28, 0.025) 44px
+          );
+      }
+
+      .yaml-paper {
+        position: relative;
+        width: min(570px, 92%);
+        min-height: 408px;
+        padding: 42px 44px;
+        border: 1px solid var(--line-strong);
+        border-radius: 4px 7px 5px 3px;
+        background: #f8f5ed;
+        box-shadow: 13px 16px 0 rgba(36, 33, 28, 0.08);
+        transform: rotate(-1.1deg);
+      }
+
+      .yaml-paper::before {
+        content: "agent-compose.yml";
+        position: absolute;
+        top: 17px;
+        right: 22px;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 9px;
+      }
+
+      .yaml-code {
+        position: relative;
+        z-index: 2;
+        margin: 0;
+        color: var(--ink);
+        font-family: var(--mono);
+        font-size: clamp(11px, 1.25vw, 14px);
+        line-height: 1.72;
+        white-space: pre;
+      }
+
+      .yaml-line {
+        min-height: 1.72em;
+        display: block;
+      }
+
+      .yaml-line.key {
+        color: var(--blue);
+      }
+
+      .pen {
+        position: absolute;
+        z-index: 6;
+        top: 0;
+        left: 0;
+        width: 132px;
+        height: 24px;
+        opacity: 0;
+        pointer-events: none;
+        transform-origin: 8px 12px;
+        transform: translate(50px, 80px) rotate(-8deg);
+        transition: transform 45ms linear;
+      }
+
+      .scene.is-active .pen {
+        opacity: 1;
+      }
+
+      .pen-body {
+        position: absolute;
+        top: 6px;
+        left: 12px;
+        width: 102px;
+        height: 12px;
+        border: 1px solid var(--ink);
+        border-radius: 1px 8px 8px 1px;
+        background: var(--rust-soft);
+      }
+
+      .pen-tip {
+        position: absolute;
+        top: 6px;
+        left: 0;
+        width: 0;
+        height: 0;
+        border-top: 6px solid transparent;
+        border-right: 14px solid var(--ink);
+        border-bottom: 6px solid transparent;
+      }
+
+      .pen-tail {
+        position: absolute;
+        top: 7px;
+        right: 1px;
+        width: 17px;
+        height: 10px;
+        border: 1px solid var(--ink);
+        border-radius: 0 7px 7px 0;
+        background: var(--sage-soft);
+      }
+
+      /* Scene 2: YAML becomes two agents */
+      .blueprint {
+        position: relative;
+        width: min(650px, 94%);
+        height: 410px;
+      }
+
+      .yaml-seed {
+        position: absolute;
+        top: 0;
+        left: 50%;
+        width: 190px;
+        padding: 16px;
+        border: 1px solid var(--line-strong);
+        background: var(--paper);
+        font-family: var(--mono);
+        font-size: 9px;
+        line-height: 1.6;
+        transform: translateX(-50%) rotate(-1deg);
+      }
+
+      .blueprint-line {
+        position: absolute;
+        top: 93px;
+        left: 50%;
+        width: 1px;
+        height: 95px;
+        background: var(--line-strong);
+        transform-origin: top;
+      }
+
+      .blueprint-line::before,
+      .blueprint-line::after {
+        content: "";
+        position: absolute;
+        top: 94px;
+        width: 198px;
+        height: 1px;
+        background: var(--line-strong);
+      }
+
+      .blueprint-line::before {
+        right: 0;
+        transform: rotate(-27deg);
+        transform-origin: right;
+      }
+
+      .blueprint-line::after {
+        left: 0;
+        transform: rotate(27deg);
+        transform-origin: left;
+      }
+
+      .agent-card {
+        position: absolute;
+        bottom: 8px;
+        width: 235px;
+        min-height: 155px;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        border: 1px solid var(--ink);
+        text-align: center;
+        opacity: 0;
+        transform: translateY(24px) scale(0.94);
+      }
+
+      .agent-card.triage {
+        left: 0;
+        border-radius: 48% 52% 44% 56% / 54% 46% 55% 45%;
+        background: var(--blue-soft);
+      }
+
+      .agent-card.draft {
+        right: 0;
+        border-radius: 54% 46% 55% 45% / 47% 55% 45% 53%;
+        background: var(--rust-soft);
+      }
+
+      .scene.is-active .agent-card {
+        animation: agent-grow 560ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      }
+
+      .scene.is-active .agent-card.draft {
+        animation-delay: 320ms;
+      }
+
+      .agent-card strong {
+        display: block;
+        font-family: var(--display);
+        font-size: 27px;
+        font-weight: 400;
+      }
+
+      .agent-card small {
+        display: block;
+        margin-top: 8px;
+        font-family: var(--mono);
+        font-size: 9px;
+      }
+
+      /* Scene 3: webhook routing */
+      .event-world {
+        position: relative;
+        width: min(690px, 96%);
+        height: 400px;
+      }
+
+      .github-source,
+      .topic-bus,
+      .listener {
+        position: absolute;
+        border: 1px solid var(--line-strong);
+        background: var(--paper);
+      }
+
+      .github-source {
+        top: 136px;
+        left: 0;
+        width: 124px;
+        padding: 21px 16px;
+        border-radius: 50%;
+        text-align: center;
+        font-family: var(--display);
+        font-size: 19px;
+      }
+
+      .topic-bus {
+        top: 72px;
+        left: 180px;
+        width: 210px;
+        height: 270px;
+        display: grid;
+        place-items: center;
+        padding: 22px;
+        border-radius: 12px 8px 13px 9px;
+        text-align: center;
+      }
+
+      .topic-bus strong {
+        font-family: var(--display);
+        font-size: 25px;
+        font-weight: 400;
+      }
+
+      .topic-bus code {
+        display: block;
+        margin-top: 12px;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 8px;
+        line-height: 1.7;
+      }
+
+      .listener {
+        right: 0;
+        width: 190px;
+        padding: 21px 18px;
+        border-radius: 9px 7px 10px 8px;
+      }
+
+      .listener.one {
+        top: 62px;
+        border-top: 3px solid var(--blue);
+      }
+
+      .listener.two {
+        bottom: 48px;
+        border-top: 3px solid var(--rust);
+      }
+
+      .listener strong {
+        display: block;
+        margin-bottom: 7px;
+        font-family: var(--display);
+        font-size: 20px;
+        font-weight: 400;
+      }
+
+      .listener small {
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 8px;
+      }
+
+      .event-line {
+        position: absolute;
+        top: 196px;
+        left: 124px;
+        width: 56px;
+        height: 1px;
+        background: var(--line-strong);
+      }
+
+      .event-line.out {
+        left: 390px;
+        width: 110px;
+      }
+
+      .event-dot {
+        position: absolute;
+        top: 192px;
+        left: 122px;
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--rust);
+        opacity: 0;
+      }
+
+      .scene.is-active .event-dot {
+        animation: route-event 2.8s 350ms ease-in-out forwards;
+      }
+
+      /* Scene 4 and 5: boundaries */
+      .boundary-world {
+        position: relative;
+        width: min(700px, 96%);
+        height: 410px;
+      }
+
+      .trusted-zone,
+      .agent-zone {
+        position: absolute;
+        top: 28px;
+        bottom: 28px;
+        padding: 28px;
+        border: 1px solid var(--line-strong);
+      }
+
+      .trusted-zone {
+        left: 0;
+        width: 46%;
+        border-radius: 11px 8px 13px 9px;
+        background: rgba(200, 209, 191, 0.32);
+      }
+
+      .agent-zone {
+        right: 0;
+        width: 46%;
+        border: 1px dashed var(--rust);
+        border-radius: 50% 45% 52% 48% / 47% 53% 46% 54%;
+        background: rgba(233, 184, 165, 0.2);
+      }
+
+      .zone-label {
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 9px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .tool-stack {
+        display: grid;
+        gap: 10px;
+        margin-top: 35px;
+      }
+
+      .tool-chip {
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 7px 9px 6px 10px;
+        background: var(--paper);
+        font-family: var(--mono);
+        font-size: 9px;
+        opacity: 0;
+        transform: translateX(-15px);
+      }
+
+      .scene.is-active .tool-chip {
+        animation: tool-enter 400ms ease forwards;
+      }
+
+      .scene.is-active .tool-chip:nth-child(2) {
+        animation-delay: 240ms;
+      }
+
+      .scene.is-active .tool-chip:nth-child(3) {
+        animation-delay: 480ms;
+      }
+
+      .agent-brain {
+        position: absolute;
+        top: 77px;
+        left: 50%;
+        width: 150px;
+        height: 150px;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--ink);
+        border-radius: 55% 45% 50% 50% / 48% 54% 46% 52%;
+        background: var(--rust-soft);
+        font-family: var(--display);
+        font-size: 24px;
+        text-align: center;
+        transform: translateX(-50%);
+      }
+
+      .token-crossout {
+        position: absolute;
+        right: 38px;
+        bottom: 72px;
+        padding: 10px 12px;
+        border: 1px solid var(--line-strong);
+        border-radius: 7px;
+        background: var(--paper);
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 9px;
+        transform: rotate(3deg);
+      }
+
+      .token-crossout::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        right: -7px;
+        left: -7px;
+        height: 2px;
+        background: var(--rust);
+        transform: rotate(-8deg);
+      }
+
+      .handoff {
+        position: absolute;
+        top: 194px;
+        left: 43%;
+        z-index: 5;
+        width: 14%;
+        border-top: 1px solid var(--line-strong);
+      }
+
+      .handoff::after {
+        content: "›";
+        position: absolute;
+        top: -13px;
+        right: -1px;
+        font-family: var(--display);
+        font-size: 22px;
+      }
+
+      /* Scene 6: validation and GitHub write */
+      .validation-world {
+        position: relative;
+        width: min(690px, 96%);
+        height: 400px;
+      }
+
+      .diff-paper {
+        position: absolute;
+        top: 65px;
+        left: 8px;
+        width: 230px;
+        height: 260px;
+        padding: 26px 22px;
+        border: 1px solid var(--line-strong);
+        background: var(--paper);
+        box-shadow: 8px 9px 0 rgba(36, 33, 28, 0.07);
+        font-family: var(--mono);
+        font-size: 9px;
+        line-height: 1.8;
+        transform: rotate(-2deg);
+      }
+
+      .diff-add {
+        color: var(--sage);
+      }
+
+      .gate-stack {
+        position: absolute;
+        top: 53px;
+        left: 275px;
+        display: grid;
+        gap: 13px;
+      }
+
+      .gate {
+        width: 185px;
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--paper);
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 9px;
+      }
+
+      .gate::before {
+        content: "✓";
+        display: inline-grid;
+        width: 18px;
+        height: 18px;
+        place-items: center;
+        margin-right: 8px;
+        border: 1px solid var(--sage);
+        border-radius: 50%;
+        color: var(--sage);
+        opacity: 0;
+      }
+
+      .scene.is-active .gate::before {
+        animation: check-in 280ms ease forwards;
+      }
+
+      .scene.is-active .gate:nth-child(2)::before {
+        animation-delay: 360ms;
+      }
+
+      .scene.is-active .gate:nth-child(3)::before {
+        animation-delay: 720ms;
+      }
+
+      .scene.is-active .gate:nth-child(4)::before {
+        animation-delay: 1080ms;
+      }
+
+      .github-destination {
+        position: absolute;
+        top: 103px;
+        right: 0;
+        width: 170px;
+        min-height: 180px;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        border: 1px solid var(--ink);
+        border-radius: 52% 48% 47% 53% / 46% 54% 48% 52%;
+        background: var(--sage-soft);
+        text-align: center;
+      }
+
+      .github-destination strong {
+        display: block;
+        font-family: var(--display);
+        font-size: 25px;
+        font-weight: 400;
+      }
+
+      .github-destination small {
+        display: block;
+        margin-top: 8px;
+        font-family: var(--mono);
+        font-size: 8px;
+      }
+
+      /* Scene 7: the human gate */
+      .final-world {
+        position: relative;
+        width: min(690px, 96%);
+        height: 410px;
+      }
+
+      .final-node {
+        position: absolute;
+        width: 210px;
+        min-height: 145px;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        border: 1px solid var(--ink);
+        text-align: center;
+      }
+
+      .final-node.triage {
+        top: 40px;
+        left: 0;
+        border-radius: 49% 51% 45% 55% / 53% 47% 55% 45%;
+        background: var(--blue-soft);
+      }
+
+      .final-node.draft {
+        right: 0;
+        bottom: 42px;
+        border-radius: 53% 47% 55% 45% / 46% 54% 45% 55%;
+        background: var(--rust-soft);
+      }
+
+      .final-node strong {
+        font-family: var(--display);
+        font-size: 25px;
+        font-weight: 400;
+      }
+
+      .human-hand {
+        position: absolute;
+        top: 152px;
+        left: 50%;
+        width: 142px;
+        padding: 18px 16px;
+        border: 1px solid var(--line-strong);
+        border-radius: 10px 7px 11px 8px;
+        background: var(--paper);
+        box-shadow: 6px 7px 0 rgba(36, 33, 28, 0.07);
+        color: var(--rust);
+        font-family: var(--mono);
+        font-size: 10px;
+        text-align: center;
+        opacity: 0;
+        transform: translate(-50%, -18px) rotate(-3deg);
+      }
+
+      .scene.is-active .human-hand {
+        animation: hand-place 580ms 550ms cubic-bezier(0.22, 1, 0.36, 1)
+          forwards;
+      }
+
+      .final-path {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+      }
+
+      .final-path path {
+        stroke-dasharray: 520;
+        stroke-dashoffset: 520;
+      }
+
+      .scene.is-active .final-path path {
+        animation: draw-path 1.4s 350ms ease-out forwards;
+      }
+
+      .draft-pr-paper {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        padding: 9px 12px;
+        border: 1px solid var(--sage);
+        border-radius: 6px;
+        background: var(--paper);
+        color: var(--sage);
+        font-family: var(--mono);
+        font-size: 9px;
+        opacity: 0;
+      }
+
+      .scene.is-active .draft-pr-paper {
+        animation: result-arrive 450ms 1.65s ease-out forwards;
+      }
+
+      @keyframes agent-grow {
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+      }
+
+      @keyframes route-event {
+        0% {
+          left: 122px;
+          opacity: 0;
+        }
+        10%,
+        85% {
+          opacity: 1;
+        }
+        42% {
+          left: 280px;
+          transform: translateY(0);
+        }
+        70% {
+          left: 454px;
+          transform: translateY(-92px);
+        }
+        100% {
+          left: 615px;
+          opacity: 0;
+          transform: translateY(-92px);
+        }
+      }
+
+      @keyframes tool-enter {
+        to {
+          opacity: 1;
+          transform: translateX(0);
+        }
+      }
+
+      @keyframes check-in {
+        from {
+          opacity: 0;
+          transform: scale(0.55);
+        }
+        to {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+
+      @keyframes hand-place {
+        to {
+          opacity: 1;
+          transform: translate(-50%, 0) rotate(-3deg);
+        }
+      }
+
+      @keyframes draw-path {
+        to {
+          stroke-dashoffset: 0;
+        }
+      }
+
+      @keyframes result-arrive {
+        from {
+          opacity: 0;
+          transform: translateY(10px) rotate(3deg);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0) rotate(0);
+        }
+      }
+
+      footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        padding: 22px 0 36px;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 9px;
+      }
+
+      @media (max-width: 940px) {
+        .blog-hero {
+          grid-template-columns: 1fr;
+          gap: 38px;
+          padding-top: 68px;
+        }
+
+        .blog-hero h1,
+        .story-head h2 {
+          white-space: normal;
+        }
+
+        .bootstrap-loop {
+          width: min(100%, 540px);
+          margin: 0 auto;
+        }
+
+        .tech-section {
+          grid-template-columns: 1fr;
+          gap: 38px;
+        }
+
+        .demo-cta {
+          grid-template-columns: 1fr;
+        }
+
+        .demo-actions {
+          width: min(100%, 320px);
+        }
+
+        .story-frame {
+          min-height: 820px;
+        }
+
+        .scene {
+          grid-template-columns: 1fr;
+          grid-template-rows: minmax(480px, 1fr) auto;
+        }
+
+        .scene-visual {
+          min-height: 480px;
+          padding-bottom: 45px;
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .scene-copy {
+          min-height: 270px;
+          padding: 30px 34px 85px;
+        }
+
+        .scene-number {
+          margin-bottom: 12px;
+        }
+
+        .scene-copy h2 {
+          margin-bottom: 10px;
+        }
+
+        .caption {
+          margin-top: 14px;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .shell {
+          width: min(100% - 22px, 1180px);
+        }
+
+        .top-note {
+          display: none;
+        }
+
+        .top-nav a:not(:last-child) {
+          display: none;
+        }
+
+        .blog-hero {
+          min-height: auto;
+          gap: 22px;
+          padding: 58px 0 68px;
+        }
+
+        .blog-hero h1 {
+          font-size: clamp(47px, 14.2vw, 66px);
+        }
+
+        .blog-lede {
+          font-size: 17px;
+        }
+
+        .customer-zero {
+          align-items: flex-start;
+        }
+
+        .bootstrap-loop {
+          min-height: 360px;
+          transform: scale(0.9);
+        }
+
+        .loop-node {
+          width: 138px;
+          min-height: 92px;
+          padding: 14px;
+        }
+
+        .loop-node strong {
+          font-size: 19px;
+        }
+
+        .story-intro {
+          padding-top: 66px;
+        }
+
+        .story-head h2 {
+          font-size: clamp(39px, 12.8vw, 56px);
+        }
+
+        .tech-section {
+          padding: 78px 0;
+        }
+
+        .tech-board-body {
+          grid-template-columns: 1fr;
+        }
+
+        .yaml-static {
+          padding: 22px;
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+          font-size: 9px;
+        }
+
+        .tech-states {
+          padding: 18px;
+        }
+
+        .demo-cta {
+          margin-bottom: 45px;
+          padding: 38px 26px;
+        }
+
+        .story {
+          padding-top: 30px;
+        }
+
+        .story-head {
+          grid-template-columns: 1fr;
+          gap: 12px;
+        }
+
+        h1 {
+          font-size: clamp(39px, 12.8vw, 56px);
+        }
+
+        .story-frame {
+          min-height: 850px;
+        }
+
+        .scene {
+          grid-template-rows: 490px auto;
+        }
+
+        .scene-visual {
+          min-height: 490px;
+          padding: 42px 17px 55px;
+        }
+
+        .scene-copy {
+          min-height: 310px;
+          padding: 27px 22px 92px;
+        }
+
+        .scene-copy p {
+          font-size: 15px;
+        }
+
+        .controls {
+          right: 16px;
+          bottom: 18px;
+          left: 16px;
+          align-items: flex-end;
+        }
+
+        .chapter-dots {
+          max-width: 138px;
+          flex-wrap: wrap;
+        }
+
+        .chapter-dot {
+          width: 26px;
+        }
+
+        .control-button {
+          padding-inline: 9px;
+        }
+
+        .github-window {
+          min-height: 440px;
+        }
+
+        .gh-header {
+          height: 41px;
+          padding-inline: 11px;
+        }
+
+        .gh-search,
+        .gh-header-links {
+          display: none;
+        }
+
+        .gh-repo-bar {
+          padding: 10px 11px 0;
+        }
+
+        .gh-repo-name {
+          margin-bottom: 9px;
+        }
+
+        .gh-tabs {
+          gap: 10px;
+          overflow: hidden;
+          white-space: nowrap;
+        }
+
+        .gh-main {
+          padding: 11px;
+        }
+
+        .gh-textarea {
+          min-height: 122px;
+        }
+
+        .issue-page-title,
+        .pr-title {
+          font-size: 14px;
+        }
+
+        .issue-layout {
+          grid-template-columns: minmax(0, 1fr) 92px;
+          gap: 9px;
+          padding-top: 10px;
+        }
+
+        .gh-comment-body {
+          min-height: 75px;
+          padding: 9px;
+          font-size: 7px;
+        }
+
+        .gh-comment.agent-comment {
+          margin-top: 7px;
+        }
+
+        .agent-compose-peek {
+          top: 93px;
+          right: 3px;
+          width: 132px;
+          padding: 9px;
+          font-size: 7px;
+        }
+
+        .ac-pip {
+          top: 56px;
+          right: 12px;
+          width: 220px;
+        }
+
+        .ac-pip-head {
+          padding: 8px 9px;
+        }
+
+        .ac-pip-body {
+          padding: 8px 9px 9px;
+        }
+
+        .ac-pip-event,
+        .ac-pipeline {
+          margin-bottom: 7px;
+        }
+
+        .ac-step {
+          padding: 5px 2px;
+          font-size: 5px;
+        }
+
+        .label-menu {
+          top: 178px;
+          right: 12px;
+          width: 166px;
+        }
+
+        .work-progress {
+          gap: 6px;
+        }
+
+        .work-progress-row {
+          padding: 7px 8px;
+          font-size: 7px;
+        }
+
+        .pr-summary-grid {
+          grid-template-columns: 1fr 112px;
+          gap: 8px;
+        }
+
+        .pr-card {
+          padding: 9px;
+          font-size: 7px;
+        }
+
+        .human-only-note {
+          right: 17px;
+          bottom: 62px;
+          font-size: 7px;
+        }
+
+        .scene.is-active .issue-form .gh-cursor {
+          animation-name: submit-cursor-mobile;
+        }
+
+        .yaml-paper {
+          width: 100%;
+          min-height: 390px;
+          padding: 43px 22px 26px;
+        }
+
+        .yaml-code {
+          font-size: 9px;
+        }
+
+        .pen {
+          width: 100px;
+          transform: scale(0.78);
+        }
+
+        .blueprint {
+          height: 430px;
+        }
+
+        .yaml-seed {
+          width: 166px;
+        }
+
+        .agent-card {
+          width: 155px;
+          min-height: 130px;
+          padding: 15px;
+        }
+
+        .agent-card strong {
+          font-size: 21px;
+        }
+
+        .blueprint-line::before,
+        .blueprint-line::after {
+          width: 130px;
+        }
+
+        .event-world {
+          height: 430px;
+        }
+
+        .github-source {
+          top: 0;
+          left: 50%;
+          transform: translateX(-50%);
+        }
+
+        .topic-bus {
+          top: 100px;
+          left: 50%;
+          width: 190px;
+          height: 170px;
+          transform: translateX(-50%);
+        }
+
+        .listener {
+          bottom: 5px;
+          width: 155px;
+        }
+
+        .listener.one {
+          top: auto;
+          left: 0;
+        }
+
+        .listener.two {
+          right: 0;
+          bottom: 5px;
+        }
+
+        .event-line,
+        .event-line.out,
+        .event-dot {
+          display: none;
+        }
+
+        .trusted-zone,
+        .agent-zone {
+          top: 0;
+          bottom: 0;
+          padding: 18px;
+        }
+
+        .tool-chip {
+          padding: 9px;
+          font-size: 8px;
+        }
+
+        .agent-brain {
+          top: 105px;
+          width: 108px;
+          height: 108px;
+          font-size: 19px;
+        }
+
+        .token-crossout {
+          right: 16px;
+          bottom: 90px;
+          font-size: 7px;
+        }
+
+        .diff-paper {
+          top: 10px;
+          left: 0;
+          width: 148px;
+          height: 230px;
+          padding: 17px 13px;
+          font-size: 7px;
+        }
+
+        .gate-stack {
+          top: 0;
+          left: 166px;
+          gap: 8px;
+        }
+
+        .gate {
+          width: 148px;
+          padding: 8px;
+          font-size: 7px;
+        }
+
+        .github-destination {
+          top: 267px;
+          right: 50%;
+          min-height: 125px;
+          transform: translateX(50%);
+        }
+
+        .final-node {
+          width: 155px;
+          min-height: 125px;
+          padding: 15px;
+        }
+
+        .final-node strong {
+          font-size: 21px;
+        }
+
+        .human-hand {
+          top: 155px;
+          width: 126px;
+          font-size: 8px;
+        }
+
+        footer {
+          flex-direction: column;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .loop-signal {
+          display: none;
+        }
+
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+
+      @keyframes submit-cursor-mobile {
+        0% {
+          top: 145px;
+          left: 82px;
+          opacity: 0;
+        }
+        8%,
+        92% {
+          opacity: 1;
+        }
+        33% {
+          top: 145px;
+          left: 265px;
+        }
+        47% {
+          top: 238px;
+          left: 86px;
+        }
+        76% {
+          top: 312px;
+          left: 225px;
+        }
+        100% {
+          top: 394px;
+          left: 292px;
+          opacity: 1;
+        }
+      }
+
+      /* Dark product theme, aligned with MonkeyCode's visual language. */
+      :root {
+        --paper: #0a0d0a;
+        --paper-deep: #0e1510;
+        --ink: #c9d6cc;
+        --muted: #7a8c80;
+        --line: #1d2a22;
+        --line-strong: #243329;
+        --rust: #7cf29c;
+        --rust-soft: #93f7ae;
+        --blue: #7cf29c;
+        --blue-soft: #111814;
+        --sage: #7cf29c;
+        --sage-soft: #162019;
+        --gold: #d6b95e;
+        --display:
+          "SFMono-Regular", "JetBrains Mono", "Noto Sans SC", "PingFang SC",
+          monospace;
+        --sans:
+          "SFMono-Regular", "JetBrains Mono", "Noto Sans SC", "PingFang SC",
+          ui-monospace, monospace;
+      }
+
+      body {
+        color: var(--ink);
+        background:
+          radial-gradient(
+            ellipse at 78% 8%,
+            rgba(37, 101, 58, 0.34),
+            transparent 38rem
+          ),
+          radial-gradient(
+            ellipse at 5% 42%,
+            rgba(24, 72, 40, 0.2),
+            transparent 34rem
+          ),
+          #0a0d0a;
+        background-size: auto;
+      }
+
+      ::selection {
+        color: #0a0d0a;
+        background: var(--rust);
+      }
+
+      .site-header {
+        border-bottom: 1px solid var(--line);
+        background: rgba(10, 13, 10, 0.82);
+        backdrop-filter: blur(18px);
+      }
+
+      .topbar {
+        border-bottom: 0;
+        background: transparent;
+      }
+
+      .brand {
+        color: #fff;
+        font-weight: 600;
+      }
+
+      .brand-mark {
+        border-color: var(--line-strong);
+        border-radius: 4px;
+        color: var(--rust);
+        background: var(--paper-deep);
+        transform: none;
+      }
+
+      .top-nav a:hover,
+      .top-nav a:focus-visible {
+        color: #fff;
+      }
+
+      .blog-hero h1,
+      .story-head h2,
+      .tech-copy h2,
+      .demo-cta h2,
+      .scene-copy h2 {
+        color: #fff;
+        font-weight: 600;
+      }
+
+      .blog-lede,
+      .tech-copy p,
+      .demo-cta p,
+      .scene-copy p,
+      .customer-zero strong {
+        font-family: var(--sans);
+      }
+
+      .blog-lede,
+      .tech-copy p,
+      .scene-copy p {
+        color: var(--muted);
+      }
+
+      .word-highlight.ai-native,
+      .word-highlight.yaml-word {
+        color: #0a0d0a;
+        background: var(--rust);
+        box-shadow: 0 0 24px rgba(124, 242, 156, 0.22);
+        transform: none;
+      }
+
+      .customer-zero {
+        border-color: var(--line-strong);
+      }
+
+      .customer-zero-mark,
+      .blog-eyebrow,
+      .section-label,
+      .kicker,
+      .scene-number,
+      .self-build-line {
+        color: var(--rust);
+      }
+
+      .loop-orbit path {
+        stroke: rgba(124, 242, 156, 0.34);
+        stroke-width: 1.8;
+        filter: drop-shadow(0 0 3px rgba(124, 242, 156, 0.2));
+      }
+
+      .loop-signal {
+        filter: drop-shadow(0 0 7px rgba(124, 242, 156, 0.7));
+      }
+
+      .loop-node,
+      .loop-node.product,
+      .loop-node.developer,
+      .loop-node.agent {
+        border-color: var(--line-strong);
+        border-radius: 6px;
+        background: var(--blue-soft);
+        box-shadow: none;
+        transform: none;
+      }
+
+      .loop-node.product {
+        border-color: rgba(124, 242, 156, 0.45);
+        transform: translateX(-50%);
+      }
+
+      .loop-node.developer {
+        transform: none;
+      }
+
+      .loop-node.agent {
+        border-color: var(--rust);
+        background: rgba(124, 242, 156, 0.08);
+        transform: none;
+      }
+
+      .loop-center {
+        color: var(--rust);
+      }
+
+      .story-intro,
+      .tech-section {
+        border-color: var(--line);
+      }
+
+      .story-frame {
+        border-color: var(--line-strong);
+        border-radius: 8px;
+        background: linear-gradient(145deg, #101712, #0b100c 68%);
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.34);
+      }
+
+      .story-frame::before {
+        border-color: rgba(124, 242, 156, 0.035);
+        border-radius: 5px;
+      }
+
+      .progress {
+        background: var(--rust);
+        box-shadow: 0 0 18px rgba(124, 242, 156, 0.7);
+      }
+
+      .scene-visual {
+        border-color: var(--line);
+        background: radial-gradient(
+          circle at 50% 38%,
+          rgba(39, 95, 56, 0.15),
+          transparent 68%
+        );
+      }
+
+      .scene-copy {
+        background: rgba(10, 13, 10, 0.3);
+      }
+
+      .caption {
+        border-color: var(--line);
+      }
+
+      .chapter-dot[aria-current="step"],
+      .scene-copy code {
+        color: var(--rust);
+      }
+
+      .chapter-dot[aria-current="step"]::after {
+        background: var(--rust);
+        box-shadow: 0 0 8px rgba(124, 242, 156, 0.5);
+      }
+
+      .control-button {
+        border-color: var(--line-strong);
+        border-radius: 4px;
+        color: var(--ink);
+        background: var(--blue-soft);
+      }
+
+      .control-button:hover,
+      .control-button:focus-visible {
+        color: #fff;
+        background: #162019;
+      }
+
+      .control-button.primary {
+        color: #0a0d0a;
+        border-color: rgba(124, 242, 156, 0.3);
+        background: var(--rust);
+        box-shadow: 0 0 20px rgba(124, 242, 156, 0.18);
+      }
+
+      .tech-board {
+        border-color: var(--line-strong);
+        border-radius: 6px;
+        background: #0d120e;
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+      }
+
+      .tech-board-head,
+      .yaml-static {
+        border-color: var(--line);
+      }
+
+      .yaml-static {
+        color: var(--ink);
+        background: #0a0d0a;
+      }
+
+      .yaml-static .yaml-key,
+      .yaml-static .yaml-value {
+        color: var(--rust);
+      }
+
+      .tech-state {
+        border-color: var(--line);
+        border-radius: 4px;
+        background: var(--blue-soft);
+      }
+
+      .tech-section.is-lit .tech-state {
+        border-color: rgba(124, 242, 156, 0.28);
+        background: rgba(124, 242, 156, 0.06);
+      }
+
+      .tech-section.is-lit .tech-state-dot {
+        background: var(--rust);
+        box-shadow: 0 0 12px rgba(124, 242, 156, 0.65);
+      }
+
+      .github-window {
+        color: #c9d1d9;
+        border-color: #30363d;
+        border-radius: 6px;
+        background: #0d1117;
+        box-shadow: 0 26px 70px rgba(0, 0, 0, 0.48);
+      }
+
+      .gh-browser-bar {
+        border-color: #21262d;
+        background: #090c10;
+      }
+
+      .gh-browser-dot:nth-child(1) {
+        background: #ff5f57;
+      }
+
+      .gh-browser-dot:nth-child(2) {
+        background: #febc2e;
+      }
+
+      .gh-browser-dot:nth-child(3) {
+        background: #28c840;
+      }
+
+      .gh-address,
+      .gh-input,
+      .gh-textarea {
+        color: #c9d1d9;
+        border-color: #30363d;
+        background: #0d1117;
+      }
+
+      .gh-header {
+        background: #010409;
+      }
+
+      .gh-repo-bar {
+        border-color: #21262d;
+        background: #0d1117;
+      }
+
+      .gh-repo-name {
+        color: #58a6ff;
+      }
+
+      .gh-tabs,
+      .gh-textarea-toolbar,
+      .issue-number-muted,
+      .gh-sidebar-label,
+      .work-progress-row small,
+      .check-row small {
+        color: #8b949e;
+      }
+
+      .gh-tab.active {
+        color: #f0f6fc;
+        border-color: var(--rust);
+      }
+
+      .gh-textarea-toolbar,
+      .issue-page-head,
+      .pr-title-row,
+      .check-row,
+      .gh-sidebar-block {
+        border-color: #21262d;
+      }
+
+      .gh-button {
+        color: #c9d1d9;
+        border-color: #30363d;
+        background: #21262d;
+      }
+
+      .gh-button.green,
+      .gh-button.purple {
+        color: #0a0d0a;
+        border-color: rgba(124, 242, 156, 0.3);
+        background: var(--rust);
+      }
+
+      .gh-cursor {
+        border-left-color: #f0f6fc;
+        filter: drop-shadow(1px 1px 0 #010409);
+      }
+
+      .gh-comment,
+      .work-progress-row,
+      .pr-card,
+      .merge-box,
+      .label-menu {
+        color: #c9d1d9;
+        border-color: #30363d;
+        background: #0d1117;
+      }
+
+      .gh-comment-head,
+      .fix-commit,
+      .label-menu-item.ready-item {
+        color: #8b949e;
+        border-color: #30363d;
+        background: #161b22;
+      }
+
+      .label-menu-head,
+      .label-menu-item {
+        border-color: #21262d;
+      }
+
+      .gh-label.ready,
+      .gh-label.running,
+      .label-swatch {
+        color: #0a0d0a;
+        background: var(--rust);
+      }
+
+      .work-progress-row::before,
+      .merge-check {
+        color: var(--rust);
+        border-color: var(--rust);
+        background: rgba(124, 242, 156, 0.08);
+      }
+
+      .agent-compose-peek,
+      .human-only-note {
+        border-color: var(--rust);
+        border-radius: 4px;
+        background: #101712;
+        box-shadow: 0 0 28px rgba(124, 242, 156, 0.12);
+      }
+
+      .ac-pip {
+        color: var(--ink);
+        border-color: rgba(124, 242, 156, 0.34);
+        border-radius: 5px;
+        background: #090d0a;
+        box-shadow: 0 0 36px rgba(124, 242, 156, 0.18);
+      }
+
+      .ac-pip-head {
+        border-color: var(--line);
+      }
+
+      .ac-pip-dot {
+        background: var(--rust);
+        box-shadow: 0 0 12px rgba(124, 242, 156, 0.7);
+      }
+
+      .ac-pip-mode {
+        color: var(--rust);
+        border-color: rgba(124, 242, 156, 0.28);
+        background: rgba(124, 242, 156, 0.07);
+      }
+
+      .ac-pip-event,
+      .ac-pip-log {
+        color: var(--muted);
+      }
+
+      .ac-pip-event strong,
+      .ac-pip-log strong,
+      .ac-step.is-on,
+      .ac-step.is-done {
+        color: var(--ink);
+      }
+
+      .ac-step {
+        border-color: var(--line);
+        color: #536157;
+      }
+
+      .ac-step.is-on,
+      .ac-step.is-done {
+        border-color: rgba(124, 242, 156, 0.34);
+        background: rgba(124, 242, 156, 0.09);
+      }
+
+      .ac-pip-log {
+        border-color: var(--rust-soft);
+        background: #111814;
+      }
+
+      .demo-cta {
+        color: var(--ink);
+        border: 1px solid rgba(124, 242, 156, 0.28);
+        border-radius: 6px;
+        background:
+          radial-gradient(
+            circle at 72% 20%,
+            rgba(124, 242, 156, 0.14),
+            transparent 22rem
+          ),
+          #101712;
+        box-shadow: 0 28px 90px rgba(0, 0, 0, 0.38);
+      }
+
+      .demo-cta::after {
+        border-color: rgba(124, 242, 156, 0.12);
+      }
+
+      .demo-cta .section-label,
+      .demo-cta p {
+        color: var(--muted);
+      }
+
+      .demo-button {
+        color: var(--ink);
+        border-color: var(--line-strong);
+        border-radius: 4px;
+        background: var(--blue-soft);
+      }
+
+      .demo-button.primary {
+        color: #0a0d0a;
+        border-color: rgba(124, 242, 156, 0.3);
+        background: var(--rust);
+        box-shadow: 0 0 24px rgba(124, 242, 156, 0.22);
+      }
+
+      footer {
+        color: var(--muted);
+        border-color: var(--line);
+      }
+    </style>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="shell topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 20 20" fill="none">
+              <path
+                d="M3 13.5 8.4 5l2.4 5 2.3-3.3 3.9 6.8"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M5 15.4c2.8-1 7.2-.9 10 .1"
+                stroke="currentColor"
+                stroke-width="1.2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </span>
+          <span>engineering workflows</span>
+        </div>
+        <nav class="top-nav" aria-label="页面导航">
+          <a href="#why">Why</a>
+          <a href="#story">Story</a>
+          <a href="#technology">Technology</a>
+          <a href="#demo">Open demo ↗</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="shell story">
+      <section class="blog-hero" id="why">
+        <div>
+          <div class="blog-eyebrow">01 · Why we built this</div>
+          <h1>Building AC with AC</h1>
+          <div class="self-build-line">
+            <span>Built on agent-compose.</span><span>→</span
+            ><span>Building agent-compose.</span>
+          </div>
+          <p class="blog-lede">
+            它运行在 agent-compose 上，也为 agent-compose 自己处理
+            Issue、修改代码和修复 CI。
+          </p>
+          <div class="customer-zero">
+            <span class="customer-zero-mark">“</span>
+            <div>
+              <strong
+                >开发者是 Customer Zero；能够自举，才够
+                <span class="word-highlight ai-native">AI Native</span></strong
+              >
+              <small
+                >让 Agent 先处理自己的 Issue、修改自己的代码、回应自己的
+                CI。</small
+              >
+            </div>
+          </div>
+        </div>
+        <div
+          class="bootstrap-loop"
+          aria-label="产品、开发者与 Agent 组成自举闭环"
+        >
+          <svg class="loop-orbit" viewBox="0 0 500 380" aria-hidden="true">
+            <path
+              d="M250 55C83 55 32 265 154 326C275 387 468 320 458 188C451 92 349 50 250 55Z"
+            />
+            <circle class="loop-signal" r="6" fill="var(--rust)">
+              <animateMotion
+                dur="7s"
+                repeatCount="indefinite"
+                path="M250 55C83 55 32 265 154 326C275 387 468 320 458 188C451 92 349 50 250 55Z"
+              />
+            </circle>
+          </svg>
+          <div class="loop-node product">
+            <div>
+              <strong>agent-compose</strong><small>product + repository</small>
+            </div>
+          </div>
+          <div class="loop-node developer">
+            <div>
+              <strong>Issue</strong><small>opened by customer zero</small>
+            </div>
+          </div>
+          <div class="loop-node agent">
+            <div>
+              <strong>Workflow Agent</strong><small>returns a Draft PR</small>
+            </div>
+          </div>
+          <div class="loop-center">repo → issue → agent → PR → repo</div>
+        </div>
+      </section>
+
+      <div class="story-head story-intro" id="story">
+        <div>
+          <div class="kicker">02 · Watch the workflow</div>
+          <h2>一个 Issue，如何走到 Draft PR？</h2>
+        </div>
+        <span class="chapter-count" data-chapter-count>01 / 07</span>
+      </div>
+
+      <section class="story-frame" aria-label="agent-compose 实现故事">
+        <div class="progress" data-progress></div>
+
+        <article class="scene is-active" data-scene="0">
+          <div class="scene-visual">
+            <div
+              class="github-window issue-form"
+              aria-label="GitHub 新建 Issue 页面"
+            >
+              <div class="gh-browser-bar">
+                <span class="gh-browser-dot"></span
+                ><span class="gh-browser-dot"></span
+                ><span class="gh-browser-dot"></span>
+                <span class="gh-address"
+                  >github.com/chaitin/agent-compose/issues/new</span
+                >
+              </div>
+              <div class="gh-header">
+                <span class="gh-logo">GH</span
+                ><span class="gh-search">Type / to search</span>
+                <span class="gh-header-links"
+                  >Pull requests&nbsp;&nbsp; Issues&nbsp;&nbsp;
+                  Marketplace</span
+                >
+              </div>
+              <div class="gh-repo-bar">
+                <div class="gh-repo-name">
+                  chaitin / <strong>agent-compose</strong>
+                </div>
+                <div class="gh-tabs">
+                  <span class="gh-tab">Code</span
+                  ><span class="gh-tab active">Issues</span
+                  ><span class="gh-tab">Pull requests</span
+                  ><span class="gh-tab">Actions</span>
+                </div>
+              </div>
+              <div class="gh-main">
+                <label class="gh-form-label">Add a title</label>
+                <div class="gh-input">
+                  <span class="issue-title-typed"
+                    >Webhook 写入成功后仍返回 HTTP 500</span
+                  >
+                </div>
+                <div class="gh-textarea">
+                  <div class="gh-textarea-toolbar">
+                    B&nbsp;&nbsp; I&nbsp;&nbsp; &lt;&gt;&nbsp;&nbsp;
+                    link&nbsp;&nbsp; list
+                  </div>
+                  <span class="issue-body-typed"
+                    >生产环境可稳定复现；写入已经成功，但调用方会重试并产生重复事件。</span
+                  >
+                </div>
+                <div class="gh-actions">
+                  <button class="gh-button green" type="button">
+                    Submit new issue
+                  </button>
+                </div>
+              </div>
+              <span class="gh-cursor" aria-hidden="true"></span>
+            </div>
+            <div
+              class="ac-pip after-submit"
+              aria-label="agent-compose 接收到新 Issue 事件"
+            >
+              <div class="ac-pip-head">
+                <span class="ac-pip-brand"
+                  ><span class="ac-pip-dot"></span>agent-compose</span
+                >
+                <span class="ac-pip-mode">LIVE</span>
+              </div>
+              <div class="ac-pip-body">
+                <div class="ac-pip-event">
+                  <strong>event received</strong><br />webhook.github.issues ·
+                  opened
+                </div>
+                <div class="ac-pipeline">
+                  <span class="ac-step is-done">event</span
+                  ><span class="ac-step is-on">scheduler</span
+                  ><span class="ac-step">agent</span
+                  ><span class="ac-step">apply</span>
+                </div>
+                <div class="ac-pip-log">
+                  <strong>Issue #439</strong> matched the triage listener.
+                  Starting a fresh sandbox…
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="scene-copy">
+            <span class="scene-number">CHAPTER 01 · A CONTRIBUTOR</span>
+            <h2>故事从一个人遇到问题开始。</h2>
+            <p>
+              贡献者打开熟悉的 GitHub Issue
+              页面，写下现象、影响与复现方式，然后点击 “Submit new
+              issue”。提交完成后，画中画亮起：agent-compose 第一次介入。
+            </p>
+            <div class="caption">
+              USER ACTION · CREATE ISSUE<br />NO SPECIAL COMMAND OR BOT MENTION
+              REQUIRED
+            </div>
+          </div>
+        </article>
+
+        <article class="scene" data-scene="1">
+          <div class="scene-visual">
+            <div class="github-window" aria-label="GitHub Issue 自动分诊结果">
+              <div class="gh-browser-bar">
+                <span class="gh-browser-dot"></span
+                ><span class="gh-browser-dot"></span
+                ><span class="gh-browser-dot"></span>
+                <span class="gh-address"
+                  >github.com/chaitin/agent-compose/issues/439</span
+                >
+              </div>
+              <div class="gh-header">
+                <span class="gh-logo">GH</span
+                ><span class="gh-search">Type / to search</span>
+              </div>
+              <div class="gh-repo-bar">
+                <div class="gh-repo-name">
+                  chaitin / <strong>agent-compose</strong>
+                </div>
+                <div class="gh-tabs">
+                  <span class="gh-tab">Code</span
+                  ><span class="gh-tab active">Issues</span
+                  ><span class="gh-tab">Pull requests</span
+                  ><span class="gh-tab">Actions</span>
+                </div>
+              </div>
+              <div class="gh-main">
+                <div class="issue-page-head">
+                  <div>
+                    <div class="issue-page-title">
+                      Webhook 写入成功后仍返回 HTTP 500
+                      <span class="issue-number-muted">#439</span>
+                    </div>
+                    <span class="issue-state">● Open</span>
+                  </div>
+                </div>
+                <div class="issue-layout">
+                  <div>
+                    <div class="gh-comment">
+                      <div class="gh-comment-head">
+                        <strong>lin</strong> opened this issue now
+                      </div>
+                      <div class="gh-comment-body">
+                        生产环境可稳定复现。写入成功后接口仍返回
+                        500，调用方因此重试。
+                      </div>
+                    </div>
+                    <div class="gh-comment agent-comment">
+                      <div class="gh-comment-head">
+                        <strong>issue-triage[bot]</strong> commented
+                      </div>
+                      <div class="gh-comment-body">
+                        <strong>分诊摘要</strong
+                        ><br />生产流程受影响；存在重复事件风险；建议优先检查响应写入顺序。
+                      </div>
+                    </div>
+                  </div>
+                  <aside>
+                    <div class="gh-sidebar-block">
+                      <div class="gh-sidebar-label">
+                        <span>Labels</span><span>⚙</span>
+                      </div>
+                      <div class="gh-labels">
+                        <span class="gh-label bug">bug</span
+                        ><span class="gh-label priority">priority:P2</span
+                        ><span class="gh-label done">triage:done</span>
+                      </div>
+                    </div>
+                  </aside>
+                </div>
+              </div>
+            </div>
+            <div class="ac-pip" aria-label="agent-compose 正在执行自动分诊">
+              <div class="ac-pip-head">
+                <span class="ac-pip-brand"
+                  ><span class="ac-pip-dot"></span>agent-compose</span
+                >
+                <span class="ac-pip-mode">AUTO</span>
+              </div>
+              <div class="ac-pip-body">
+                <div class="ac-pip-event">
+                  <strong>issue-triage run</strong><br />target ·
+                  chaitin/agent-compose#439
+                </div>
+                <div class="ac-pipeline">
+                  <span class="ac-step is-done">event</span
+                  ><span class="ac-step is-done">scheduler</span
+                  ><span class="ac-step is-done">agent</span
+                  ><span class="ac-step is-on">apply</span>
+                </div>
+                <div class="ac-pip-log">
+                  <strong>managed write</strong> · labels + one comment. Human
+                  content remains untouched.
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="scene-copy">
+            <span class="scene-number">CHAPTER 02 · AUTOMATIC TRIAGE</span>
+            <h2>几秒后，Issue 自己变得更清楚。</h2>
+            <p>
+              使用者看到 labels 和一条分诊评论陆续出现。画中画同步点亮
+              Webhook、Scheduler、Agent 与受管写入，让幕后执行变得可见。
+            </p>
+            <div class="caption">
+              VISIBLE RESULT · LABELS + ONE MANAGED COMMENT<br />TITLE AND USER
+              CONTENT ARE PRESERVED
+            </div>
+          </div>
+        </article>
+
+        <article class="scene" data-scene="2">
+          <div class="scene-visual">
+            <div
+              class="github-window label-authorize"
+              aria-label="维护者为 GitHub Issue 添加 agent ready 标签"
+            >
+              <div class="gh-browser-bar">
+                <span class="gh-browser-dot"></span
+                ><span class="gh-browser-dot"></span
+                ><span class="gh-browser-dot"></span
+                ><span class="gh-address"
+                  >github.com/chaitin/agent-compose/issues/439</span
+                >
+              </div>
+              <div class="gh-header">
+                <span class="gh-logo">GH</span
+                ><span class="gh-search">Type / to search</span>
+              </div>
+              <div class="gh-repo-bar">
+                <div class="gh-repo-name">
+                  chaitin / <strong>agent-compose</strong>
+                </div>
+                <div class="gh-tabs">
+                  <span class="gh-tab">Code</span
+                  ><span class="gh-tab active">Issues</span
+                  ><span class="gh-tab">Pull requests</span>
+                </div>
+              </div>
+              <div class="gh-main">
+                <div class="issue-page-head">
+                  <div>
+                    <div class="issue-page-title">
+                      Webhook 写入成功后仍返回 HTTP 500
+                      <span class="issue-number-muted">#439</span>
+                    </div>
+                    <span class="issue-state">● Open</span>
+                  </div>
+                </div>
+                <div class="issue-layout">
+                  <div class="gh-comment">
+                    <div class="gh-comment-head">
+                      <strong>issue-triage[bot]</strong> commented
+                    </div>
+                    <div class="gh-comment-body">
+                      范围明确、可复现，建议作为低风险修复处理。
+                    </div>
+                  </div>
+                  <aside>
+                    <div class="gh-sidebar-block">
+                      <div class="gh-sidebar-label">
+                        <span>Labels</span><span>⚙</span>
+                      </div>
+                      <div class="gh-labels">
+                        <span class="gh-label bug">bug</span
+                        ><span class="gh-label priority">priority:P2</span>
+                      </div>
+                    </div>
+                  </aside>
+                </div>
+              </div>
+              <div class="label-menu">
+                <div class="label-menu-head">Apply labels to this issue</div>
+                <div class="label-menu-item">
+                  <span class="label-swatch" style="background: #d1242f"></span
+                  >bug
+                </div>
+                <div class="label-menu-item ready-item">
+                  <span class="label-swatch"></span><strong>agent:ready</strong>
+                </div>
+                <div class="label-menu-item">
+                  <span class="label-swatch" style="background: #fbca04"></span
+                  >priority:P2
+                </div>
+              </div>
+              <span class="gh-cursor" aria-hidden="true"></span>
+            </div>
+            <div
+              class="ac-pip waiting"
+              aria-label="agent-compose 正在等待维护者授权"
+            >
+              <div class="ac-pip-head">
+                <span class="ac-pip-brand"
+                  ><span class="ac-pip-dot"></span>agent-compose</span
+                >
+                <span class="ac-pip-mode">WAITING</span>
+              </div>
+              <div class="ac-pip-body">
+                <div class="ac-pip-event">
+                  <strong>draft-pr listener</strong><br />authorization gate ·
+                  closed
+                </div>
+                <div class="ac-pipeline">
+                  <span class="ac-step">event</span
+                  ><span class="ac-step">scheduler</span
+                  ><span class="ac-step">agent</span
+                  ><span class="ac-step">apply</span>
+                </div>
+                <div class="ac-pip-log">
+                  <strong>no automation yet</strong> · waiting for a maintainer
+                  to add agent:ready.
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="scene-copy">
+            <span class="scene-number">CHAPTER 03 · THE HUMAN GATE</span>
+            <h2>维护者看完信息，做第一次关键决定。</h2>
+            <p>
+              问题清楚、范围合适时，维护者在 GitHub 标签菜单中选择
+              <code>agent:ready</code>。这不是普通状态标记，而是允许 Agent
+              修改仓库的明确授权；在此之前，画中画会一直显示 WAITING。
+            </p>
+            <div class="caption">
+              HUMAN ACTION · ADD agent:ready<br />TRIAGE NEVER ADDS THIS LABEL
+            </div>
+          </div>
+        </article>
+
+        <article class="scene" data-scene="3">
+          <div class="scene-visual">
+            <div
+              class="github-window"
+              aria-label="GitHub Issue 显示 Agent 正在工作"
+            >
+              <div class="gh-browser-bar">
+                <span class="gh-browser-dot"></span
+                ><span class="gh-browser-dot"></span
+                ><span class="gh-browser-dot"></span
+                ><span class="gh-address"
+                  >github.com/chaitin/agent-compose/issues/439</span
+                >
+              </div>
+              <div class="gh-header">
+                <span class="gh-logo">GH</span
+                ><span class="gh-search">Type / to search</span>
+              </div>
+              <div class="gh-repo-bar">
+                <div class="gh-repo-name">
+                  chaitin / <strong>agent-compose</strong>
+                </div>
+                <div class="gh-tabs">
+                  <span class="gh-tab">Code</span
+                  ><span class="gh-tab active">Issues</span
+                  ><span class="gh-tab">Pull requests</span
+                  ><span class="gh-tab">Actions</span>
+                </div>
+              </div>
+              <div class="gh-main">
+                <div class="issue-page-head">
+                  <div>
+                    <div class="issue-page-title">
+                      Webhook 写入成功后仍返回 HTTP 500
+                      <span class="issue-number-muted">#439</span>
+                    </div>
+                    <div class="gh-labels" style="margin-top: 8px">
+                      <span class="gh-label running">agent:running</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="work-progress">
+                  <div class="work-progress-row">
+                    <span></span><strong>验证 Issue 与仓库状态</strong
+                    ><small>trusted tool</small>
+                  </div>
+                  <div class="work-progress-row">
+                    <span></span><strong>准备隔离 workspace</strong
+                    ><small>new sandbox</small>
+                  </div>
+                  <div class="work-progress-row">
+                    <span></span><strong>实现修复并添加回归测试</strong
+                    ><small>Draft PR Agent</small>
+                  </div>
+                  <div class="work-progress-row">
+                    <span></span><strong>检查 diff、测试与风险</strong
+                    ><small>trusted tool</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div
+              class="ac-pip"
+              aria-label="agent-compose 正在编排 Draft PR Agent"
+            >
+              <div class="ac-pip-head">
+                <span class="ac-pip-brand"
+                  ><span class="ac-pip-dot"></span>agent-compose</span
+                >
+                <span class="ac-pip-mode">RUNNING</span>
+              </div>
+              <div class="ac-pip-body">
+                <div class="ac-pip-event">
+                  <strong>authorized event</strong><br />agent:ready · Issue
+                  #439
+                </div>
+                <div class="ac-pipeline">
+                  <span class="ac-step is-done">event</span
+                  ><span class="ac-step is-done">scheduler</span
+                  ><span class="ac-step is-on">agent</span
+                  ><span class="ac-step">apply</span>
+                </div>
+                <div class="ac-pip-log">
+                  <strong>fresh sandbox</strong> · workspace mounted,
+                  credentials cleared, Agent editing + testing.
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="scene-copy">
+            <span class="scene-number">CHAPTER 04 · WORK IN PROGRESS</span>
+            <h2>使用者留在 GitHub，幕后开始工作。</h2>
+            <p>
+              Issue 进入 <code>agent:running</code>。agent-compose 在全新
+              sandbox 中挂载隔离 checkout；Agent 可以编辑和测试，但拿不到 GitHub
+              凭据，也不能 commit 或 push。
+            </p>
+            <div class="caption">
+              VISIBLE STATE · agent:running<br />NO TOKEN · NO COMMIT · NO PUSH
+            </div>
+          </div>
+        </article>
+
+        <article class="scene" data-scene="4">
+          <div class="scene-visual">
+            <div
+              class="github-window"
+              aria-label="GitHub Draft Pull Request 页面"
+            >
+              <div class="gh-browser-bar">
+                <span class="gh-browser-dot"></span
+                ><span class="gh-browser-dot"></span
+                ><span class="gh-browser-dot"></span
+                ><span class="gh-address"
+                  >github.com/chaitin/agent-compose/pull/440</span
+                >
+              </div>
+              <div class="gh-header">
+                <span class="gh-logo">GH</span
+                ><span class="gh-search">Type / to search</span>
+              </div>
+              <div class="gh-repo-bar">
+                <div class="gh-repo-name">
+                  chaitin / <strong>agent-compose</strong>
+                </div>
+                <div class="gh-tabs">
+                  <span class="gh-tab">Code</span
+                  ><span class="gh-tab">Issues</span
+                  ><span class="gh-tab active">Pull requests</span
+                  ><span class="gh-tab">Actions</span>
+                </div>
+              </div>
+              <div class="gh-main">
+                <div class="pr-title-row">
+                  <div>
+                    <div class="pr-title">
+                      Return success after webhook persistence
+                      <span class="issue-number-muted">#440</span>
+                    </div>
+                    <span class="draft-badge">Draft</span>
+                  </div>
+                </div>
+                <div class="gh-tabs" style="margin-top: 13px">
+                  <span class="gh-tab active">Conversation</span
+                  ><span class="gh-tab">Commits 1</span
+                  ><span class="gh-tab">Checks 2</span
+                  ><span class="gh-tab">Files changed 3</span>
+                </div>
+                <div class="pr-summary-grid">
+                  <div class="pr-card">
+                    <strong>Summary</strong>Ensure the success response is
+                    written after the webhook transaction commits.<br />Add a
+                    regression test covering duplicate delivery behavior.
+                    <div class="diff-stat">
+                      <span></span><span></span><span></span
+                      ><span class="minus"></span>
+                    </div>
+                  </div>
+                  <div class="pr-card">
+                    <strong>Reviewers</strong>maintainers<br /><br /><strong
+                      >Development</strong
+                    >Closes #439
+                  </div>
+                </div>
+                <div class="gh-comment agent-comment">
+                  <div class="gh-comment-head">
+                    <strong>draft-pr[bot]</strong> opened this draft pull
+                    request
+                  </div>
+                  <div class="gh-comment-body">
+                    Tests: passed · Risk: low · Branch: codex/issue-439
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div
+              class="ac-pip"
+              aria-label="agent-compose 已验证并创建 Draft PR"
+            >
+              <div class="ac-pip-head">
+                <span class="ac-pip-brand"
+                  ><span class="ac-pip-dot"></span>agent-compose</span
+                >
+                <span class="ac-pip-mode">APPLY</span>
+              </div>
+              <div class="ac-pip-body">
+                <div class="ac-pip-event">
+                  <strong>Agent result received</strong><br />outcome ·
+                  implemented · risk low
+                </div>
+                <div class="ac-pipeline">
+                  <span class="ac-step is-done">event</span
+                  ><span class="ac-step is-done">scheduler</span
+                  ><span class="ac-step is-done">agent</span
+                  ><span class="ac-step is-on">apply</span>
+                </div>
+                <div class="ac-pip-log">
+                  <strong>trusted boundary</strong> · diff + tests validated →
+                  commit, push, open Draft PR.
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="scene-copy">
+            <span class="scene-number">CHAPTER 05 · A DRAFT APPEARS</span>
+            <h2>Issue 旁边，出现一份可以阅读的 Draft PR。</h2>
+            <p>
+              可信外层验证 diff、测试、secret 与风险后，才替 Agent
+              commit、non-force push 并创建 Draft
+              PR。使用者直接看到摘要、测试和完整改动。
+            </p>
+            <div class="caption">
+              VISIBLE RESULT · DRAFT PR #440<br />THE WORKFLOW NEVER MARKS IT
+              READY OR MERGES IT
+            </div>
+          </div>
+        </article>
+
+        <article class="scene" data-scene="5">
+          <div class="scene-visual">
+            <div
+              class="github-window"
+              aria-label="GitHub Pull Request 检查与自动修复页面"
+            >
+              <div class="gh-browser-bar">
+                <span class="gh-browser-dot"></span
+                ><span class="gh-browser-dot"></span
+                ><span class="gh-browser-dot"></span
+                ><span class="gh-address"
+                  >github.com/chaitin/agent-compose/pull/440/checks</span
+                >
+              </div>
+              <div class="gh-header">
+                <span class="gh-logo">GH</span
+                ><span class="gh-search">Type / to search</span>
+              </div>
+              <div class="gh-repo-bar">
+                <div class="gh-repo-name">
+                  chaitin / <strong>agent-compose</strong>
+                </div>
+                <div class="gh-tabs">
+                  <span class="gh-tab">Code</span
+                  ><span class="gh-tab">Issues</span
+                  ><span class="gh-tab active">Pull requests</span
+                  ><span class="gh-tab">Actions</span>
+                </div>
+              </div>
+              <div class="gh-main">
+                <div class="pr-title-row">
+                  <div>
+                    <div class="pr-title">
+                      Return success after webhook persistence
+                      <span class="issue-number-muted">#440</span>
+                    </div>
+                    <span class="draft-badge">Draft</span>
+                  </div>
+                </div>
+                <div class="gh-tabs" style="margin-top: 13px">
+                  <span class="gh-tab">Conversation</span
+                  ><span class="gh-tab">Commits 2</span
+                  ><span class="gh-tab active">Checks 2</span
+                  ><span class="gh-tab">Files changed 3</span>
+                </div>
+                <div class="pr-card" style="margin-top: 14px">
+                  <strong>Checks</strong>
+                  <div class="check-row">
+                    <span class="check-icon">×</span
+                    ><span
+                      ><strong>task test:unit</strong><br /><small
+                        >duplicate delivery regression failed</small
+                      ></span
+                    ><small>1m 12s</small>
+                  </div>
+                  <div class="fix-commit">
+                    <strong>draft-pr[bot]</strong> pushed 1 fix commit · verify
+                    response ordering before retry
+                  </div>
+                  <div class="check-row">
+                    <span class="check-icon ok">✓</span
+                    ><span
+                      ><strong>task test:unit</strong><br /><small
+                        >all package tests passed</small
+                      ></span
+                    ><small>58s</small>
+                  </div>
+                  <div class="check-row">
+                    <span class="check-icon ok">✓</span
+                    ><span
+                      ><strong>task lint</strong><br /><small
+                        >no issues found</small
+                      ></span
+                    ><small>22s</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="ac-pip" aria-label="agent-compose 正在执行 CI 修复循环">
+              <div class="ac-pip-head">
+                <span class="ac-pip-brand"
+                  ><span class="ac-pip-dot"></span>agent-compose</span
+                >
+                <span class="ac-pip-mode">FIX LOOP</span>
+              </div>
+              <div class="ac-pip-body">
+                <div class="ac-pip-event">
+                  <strong>check_suite.completed</strong><br />conclusion ·
+                  failure · current head
+                </div>
+                <div class="ac-pipeline">
+                  <span class="ac-step is-done">event</span
+                  ><span class="ac-step is-done">scheduler</span
+                  ><span class="ac-step is-done">agent</span
+                  ><span class="ac-step is-on">apply</span>
+                </div>
+                <div class="ac-pip-log">
+                  <strong>verified repair</strong> · failed checks refetched → 1
+                  fix commit → non-force push.
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="scene-copy">
+            <span class="scene-number">CHAPTER 06 · FEEDBACK LOOP</span>
+            <h2>CI 或 Review 提出问题，PR 会继续长好。</h2>
+            <p>
+              失败的 check suite 或可信 Reviewer 的 changes requested
+              会触发一次新的隔离运行。Agent 验证问题并修复；每批最多一个
+              commit，绝不 force-push。
+            </p>
+            <div class="caption">
+              VISIBLE RESULT · FIX COMMIT + GREEN CHECKS<br />STALE HEADS AND
+              UNTRUSTED COMMENTS ARE REJECTED
+            </div>
+          </div>
+        </article>
+
+        <article class="scene" data-scene="6">
+          <div class="scene-visual">
+            <div
+              class="github-window"
+              aria-label="GitHub Pull Request 等待维护者最终决定"
+            >
+              <div class="gh-browser-bar">
+                <span class="gh-browser-dot"></span
+                ><span class="gh-browser-dot"></span
+                ><span class="gh-browser-dot"></span
+                ><span class="gh-address"
+                  >github.com/chaitin/agent-compose/pull/440</span
+                >
+              </div>
+              <div class="gh-header">
+                <span class="gh-logo">GH</span
+                ><span class="gh-search">Type / to search</span>
+              </div>
+              <div class="gh-repo-bar">
+                <div class="gh-repo-name">
+                  chaitin / <strong>agent-compose</strong>
+                </div>
+                <div class="gh-tabs">
+                  <span class="gh-tab">Code</span
+                  ><span class="gh-tab">Issues</span
+                  ><span class="gh-tab active">Pull requests</span
+                  ><span class="gh-tab">Actions</span>
+                </div>
+              </div>
+              <div class="gh-main">
+                <div class="pr-title-row">
+                  <div>
+                    <div class="pr-title">
+                      Return success after webhook persistence
+                      <span class="issue-number-muted">#440</span>
+                    </div>
+                    <span class="draft-badge">Draft</span>
+                  </div>
+                  <button class="gh-button" type="button">Edit</button>
+                </div>
+                <div class="gh-tabs" style="margin-top: 13px">
+                  <span class="gh-tab active">Conversation</span
+                  ><span class="gh-tab">Commits 2</span
+                  ><span class="gh-tab">Checks 2</span
+                  ><span class="gh-tab">Files changed 3</span>
+                </div>
+                <div class="gh-comment" style="margin-top: 14px">
+                  <div class="gh-comment-head">
+                    <strong>maintainer</strong> approved these changes
+                  </div>
+                  <div class="gh-comment-body">
+                    Implementation matches the Issue, regression coverage is
+                    present, and all checks pass.
+                  </div>
+                </div>
+                <div class="merge-box">
+                  <div class="merge-box-head">
+                    <span class="merge-check">✓</span
+                    ><span>All checks have passed · Review approved</span>
+                  </div>
+                  <button class="gh-button purple" type="button">
+                    Ready for review
+                  </button>
+                  <button class="gh-button green" type="button">
+                    Merge pull request
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div
+              class="ac-pip human-only"
+              aria-label="agent-compose 已停止自动化并等待维护者"
+            >
+              <div class="ac-pip-head">
+                <span class="ac-pip-brand"
+                  ><span class="ac-pip-dot"></span>agent-compose</span
+                >
+                <span class="ac-pip-mode">HUMAN ONLY</span>
+              </div>
+              <div class="ac-pip-body">
+                <div class="ac-pip-event">
+                  <strong>workflow boundary reached</strong><br />Draft PR ·
+                  checks green · review approved
+                </div>
+                <div class="ac-pipeline">
+                  <span class="ac-step is-done">event</span
+                  ><span class="ac-step is-done">scheduler</span
+                  ><span class="ac-step is-done">agent</span
+                  ><span class="ac-step is-done">apply</span>
+                </div>
+                <div class="ac-pip-log">
+                  <strong>automation stopped</strong> · ready / merge / close
+                  remain explicit maintainer actions.
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="scene-copy">
+            <span class="scene-number">CHAPTER 07 · BACK TO THE HUMAN</span>
+            <h2>最后，镜头回到维护者面前。</h2>
+            <p>
+              完整 diff、测试和修复记录都在熟悉的 GitHub PR 页面里。Workflow
+              在这里停下：是否标记 ready、是否 merge、是否关闭
+              Issue，始终由维护者决定。
+            </p>
+            <div class="caption">
+              HUMAN ACTION · REVIEW AND DECIDE<br />THE WORKFLOW NEVER MERGES
+            </div>
+          </div>
+        </article>
+
+        <div class="controls" aria-label="故事播放控制">
+          <div class="chapter-dots" data-chapter-dots></div>
+          <div class="playback">
+            <button class="control-button" type="button" data-prev>
+              ← 上一幕
+            </button>
+            <button class="control-button primary" type="button" data-play>
+              暂停
+            </button>
+            <button class="control-button" type="button" data-next>
+              下一幕 →
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="tech-section" id="technology" data-tech-section>
+        <div class="tech-copy">
+          <div class="section-label">03 · Under the hood</div>
+          <h2>
+            幕后，从一份 <span class="word-highlight yaml-word">YAML</span>
+            开始。
+          </h2>
+          <p>
+            配置声明 Agent、Skill 和
+            Scheduler；运行时再把事件、隔离环境与可信写入依次点亮。
+          </p>
+        </div>
+        <div class="tech-board" aria-label="agent-compose YAML 与运行状态">
+          <div class="tech-board-head">
+            <span>agent-compose.yml</span><span>declarative → runtime</span>
+          </div>
+          <div class="tech-board-body">
+            <pre class="yaml-static"><span class="yaml-key">agents:</span>
+  issue-triage:
+    <span class="yaml-key">skills:</span> [issue-triage]
+    <span class="yaml-key">scheduler:</span>
+      sandbox_policy: <span class="yaml-value">new</span>
+      concurrency_policy: <span class="yaml-value">parallel</span>
+
+  draft-pr:
+    <span class="yaml-key">skills:</span> [draft-pr]
+    <span class="yaml-key">scheduler:</span>
+      sandbox_policy: <span class="yaml-value">new</span></pre>
+            <div class="tech-states">
+              <div class="tech-state">
+                <span class="tech-state-dot"></span><span>config loaded</span
+                ><small>YAML</small>
+              </div>
+              <div class="tech-state">
+                <span class="tech-state-dot"></span><span>event subscribed</span
+                ><small>QuickJS</small>
+              </div>
+              <div class="tech-state">
+                <span class="tech-state-dot"></span><span>sandbox created</span
+                ><small>Agent</small>
+              </div>
+              <div class="tech-state">
+                <span class="tech-state-dot"></span><span>verified write</span
+                ><small>Node tool</small>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="demo-cta" id="demo">
+        <div>
+          <div class="section-label">04 · See it for yourself</div>
+          <h2>别停下，去现场看看。</h2>
+          <p>
+            打开 Agent Compose UI，查看一次真实 Issue，或直接阅读 Workflow
+            源码。
+          </p>
+        </div>
+        <div class="demo-actions">
+          <a
+            class="demo-button primary"
+            href="https://agent-compose.example.com"
+            target="_blank"
+            rel="noreferrer"
+            >打开 Agent Compose UI <span>↗</span></a
+          >
+          <a
+            class="demo-button"
+            href="https://github.com/chaitin/agent-compose/issues"
+            target="_blank"
+            rel="noreferrer"
+            >查看真实 Issue <span>↗</span></a
+          >
+          <a
+            class="demo-button"
+            href="https://github.com/winterfx/engineering-agent-workflows"
+            target="_blank"
+            rel="noreferrer"
+            >浏览 Workflow 仓库 <span>→</span></a
+          >
+        </div>
+      </section>
+    </main>
+
+    <footer class="shell">
+      <span>engineering-agent-workflows · powered by agent-compose</span>
+      <span>7 chapters · explicit trust boundaries · Draft PR only</span>
+    </footer>
+
+    <script>
+      (() => {
+        const scenes = [...document.querySelectorAll("[data-scene]")];
+        const dotsRoot = document.querySelector("[data-chapter-dots]");
+        const count = document.querySelector("[data-chapter-count]");
+        const progress = document.querySelector("[data-progress]");
+        const prevButton = document.querySelector("[data-prev]");
+        const nextButton = document.querySelector("[data-next]");
+        const playButton = document.querySelector("[data-play]");
+        const reducedMotion = window.matchMedia(
+          "(prefers-reduced-motion: reduce)",
+        ).matches;
+        let active = 0;
+        let playing = !reducedMotion;
+        let storyTimer;
+
+        scenes.forEach((_, index) => {
+          const dot = document.createElement("button");
+          dot.type = "button";
+          dot.className = "chapter-dot";
+          dot.textContent = String(index + 1).padStart(2, "0");
+          dot.setAttribute("aria-label", `跳到第 ${index + 1} 幕`);
+          dot.addEventListener("click", () => showScene(index, true));
+          dotsRoot.appendChild(dot);
+        });
+        const dots = [...dotsRoot.children];
+
+        function clearStoryTimer() {
+          window.clearTimeout(storyTimer);
+        }
+
+        function scheduleNext() {
+          clearStoryTimer();
+          if (!playing) return;
+          storyTimer = window.setTimeout(
+            () => {
+              showScene((active + 1) % scenes.length, false);
+            },
+            active === 0 ? 6800 : 6100,
+          );
+        }
+
+        function showScene(index, pauseAfterSelection) {
+          active = (index + scenes.length) % scenes.length;
+          scenes.forEach((scene, sceneIndex) => {
+            scene.classList.toggle("is-active", sceneIndex === active);
+            scene.setAttribute("aria-hidden", String(sceneIndex !== active));
+          });
+          dots.forEach((dot, dotIndex) => {
+            if (dotIndex === active) dot.setAttribute("aria-current", "step");
+            else dot.removeAttribute("aria-current");
+          });
+          count.textContent = `${String(active + 1).padStart(2, "0")} / ${String(scenes.length).padStart(2, "0")}`;
+          progress.style.setProperty(
+            "--progress",
+            `${((active + 1) / scenes.length) * 100}%`,
+          );
+          prevButton.disabled = active === 0;
+          nextButton.textContent =
+            active === scenes.length - 1 ? "重新开始 ↻" : "下一幕 →";
+          if (pauseAfterSelection) {
+            playing = false;
+            playButton.textContent = "继续播放";
+          }
+          scheduleNext();
+        }
+
+        prevButton.addEventListener("click", () => showScene(active - 1, true));
+        nextButton.addEventListener("click", () =>
+          showScene((active + 1) % scenes.length, true),
+        );
+        playButton.addEventListener("click", () => {
+          playing = !playing;
+          playButton.textContent = playing ? "暂停" : "继续播放";
+          scheduleNext();
+        });
+
+        const techSection = document.querySelector("[data-tech-section]");
+        if (reducedMotion || !("IntersectionObserver" in window)) {
+          techSection.classList.add("is-lit");
+        } else {
+          const techObserver = new IntersectionObserver(
+            (entries, observer) => {
+              if (!entries.some((entry) => entry.isIntersecting)) return;
+              techSection.classList.add("is-lit");
+              observer.disconnect();
+            },
+            { threshold: 0.35 },
+          );
+          techObserver.observe(techSection);
+        }
+
+        if (reducedMotion) playButton.textContent = "开始播放";
+        showScene(0, false);
+      })();
+    </script>
+  </body>
+</html>

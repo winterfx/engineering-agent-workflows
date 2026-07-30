@@ -1,7 +1,16 @@
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
-import { chmod, lstat, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { isIP } from "node:net";
+import os from "node:os";
 import path from "node:path";
 import type { DraftPrInspection } from "./schema.js";
 
@@ -189,53 +198,7 @@ export class GitDraftPrWorkspace implements DraftPrWorkspace {
   }
 
   async inspect(workspacePath: string): Promise<DraftPrInspection> {
-    const resolved = this.#assertWorkspacePath(workspacePath);
-    const env = this.#localGitEnvironment();
-    await runGit(["add", "-A"], { cwd: resolved, env });
-    const [head, names, stats, check, diff] = await Promise.all([
-      runGit(["rev-parse", "HEAD"], { cwd: resolved, env }),
-      runGit(["diff", "--cached", "--name-only", "-z"], {
-        cwd: resolved,
-        env,
-      }),
-      runGit(["diff", "--cached", "--numstat"], { cwd: resolved, env }),
-      runGit(["diff", "--cached", "--check"], {
-        cwd: resolved,
-        env,
-        allowFailure: true,
-      }),
-      runGit(
-        [
-          "diff",
-          "--cached",
-          "--unified=0",
-          "--no-color",
-          "--no-ext-diff",
-          "--no-textconv",
-        ],
-        {
-          cwd: resolved,
-          env,
-          maxOutputBytes: 8 * 1024 * 1024,
-        },
-      ),
-    ]);
-    const changedFiles = names.stdout.split("\0").filter(Boolean);
-    let additions = 0;
-    let deletions = 0;
-    for (const line of stats.stdout.split("\n")) {
-      const [added, deleted] = line.split("\t");
-      if (/^\d+$/.test(added ?? "")) additions += Number(added);
-      if (/^\d+$/.test(deleted ?? "")) deletions += Number(deleted);
-    }
-    return {
-      headCommit: head.stdout.trim(),
-      changedFiles,
-      additions,
-      deletions,
-      diffCheckPassed: check.exitCode === 0,
-      secretFindingPaths: scanAddedLinesForSecrets(diff.stdout),
-    };
+    return inspectDraftPrWorkspace(this.#root, workspacePath);
   }
 
   async commitAndPush(
@@ -423,6 +386,110 @@ export class GitDraftPrWorkspace implements DraftPrWorkspace {
       { mode: 0o600 },
     );
   }
+}
+
+export async function inspectDraftPrWorkspace(
+  root: string,
+  workspacePath: string,
+): Promise<DraftPrInspection> {
+  const resolved = assertWorkspacePath(root, workspacePath);
+  const env = localGitEnvironment();
+  await runGit(["add", "-A"], { cwd: resolved, env });
+  const [head, tree, names, stats, check, diff] = await Promise.all([
+    runGit(["rev-parse", "HEAD"], { cwd: resolved, env }),
+    runGit(["write-tree"], { cwd: resolved, env }),
+    runGit(["diff", "--cached", "--name-only", "-z"], {
+      cwd: resolved,
+      env,
+    }),
+    runGit(["diff", "--cached", "--numstat"], { cwd: resolved, env }),
+    runGit(["diff", "--cached", "--check"], {
+      cwd: resolved,
+      env,
+      allowFailure: true,
+    }),
+    runGit(
+      [
+        "diff",
+        "--cached",
+        "--unified=0",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+      ],
+      {
+        cwd: resolved,
+        env,
+        maxOutputBytes: 8 * 1024 * 1024,
+      },
+    ),
+  ]);
+  const changedFiles = names.stdout.split("\0").filter(Boolean);
+  let additions = 0;
+  let deletions = 0;
+  for (const line of stats.stdout.split("\n")) {
+    const [added, deleted] = line.split("\t");
+    if (/^\d+$/.test(added ?? "")) additions += Number(added);
+    if (/^\d+$/.test(deleted ?? "")) deletions += Number(deleted);
+  }
+  return {
+    headCommit: head.stdout.trim(),
+    changeFingerprint: tree.stdout.trim(),
+    changedFiles,
+    additions,
+    deletions,
+    diffCheckPassed: check.exitCode === 0,
+    secretFindingPaths: scanAddedLinesForSecrets(diff.stdout),
+  };
+}
+
+export async function fingerprintDraftPrWorkspace(
+  root: string,
+  workspacePath: string,
+): Promise<Pick<DraftPrInspection, "headCommit" | "changeFingerprint">> {
+  const resolved = assertWorkspacePath(root, workspacePath);
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "draft-pr-index-"),
+  );
+  try {
+    const env = {
+      ...localGitEnvironment(),
+      GIT_INDEX_FILE: path.join(temporaryDirectory, "index"),
+    };
+    await runGit(["read-tree", "HEAD"], { cwd: resolved, env });
+    await runGit(["add", "-A"], { cwd: resolved, env });
+    const [head, tree] = await Promise.all([
+      runGit(["rev-parse", "HEAD"], { cwd: resolved, env }),
+      runGit(["write-tree"], { cwd: resolved, env }),
+    ]);
+    return {
+      headCommit: head.stdout.trim(),
+      changeFingerprint: tree.stdout.trim(),
+    };
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
+function assertWorkspacePath(root: string, value: string): string {
+  const resolvedRoot = path.resolve(root);
+  const resolved = path.resolve(value);
+  const expectedPrefix = `${path.join(resolvedRoot, "repositories")}${path.sep}`;
+  if (!resolved.startsWith(expectedPrefix)) {
+    throw new Error("workspace path is outside the configured Draft PR root");
+  }
+  return resolved;
+}
+
+function localGitEnvironment(): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    LANG: process.env.LANG ?? "C.UTF-8",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_TERMINAL_PROMPT: "0",
+  };
 }
 
 export function gitCurlResolveEnvironment(

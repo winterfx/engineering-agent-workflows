@@ -14,13 +14,18 @@ import {
   failReviewFix,
   prepareReviewFix,
 } from "./review-tool.js";
+import { assertAllowedRepository } from "./repository.js";
 import { assertBoundDraftPrTarget, assertBoundReviewTarget } from "./target.js";
 import { applyDraftPr, failDraftPr, prepareDraftPr } from "./tool.js";
-import { GitDraftPrWorkspace } from "./workspace.js";
+import {
+  fingerprintDraftPrWorkspace,
+  GitDraftPrWorkspace,
+} from "./workspace.js";
 
 interface CLIOptions {
   command:
     | "prepare"
+    | "inspect-validation"
     | "apply"
     | "fail"
     | "prepare-review"
@@ -41,17 +46,19 @@ interface CLIOptions {
   headSha?: string;
   checkSuiteId?: number;
   attempts?: number;
+  workspacePath?: string;
 }
 
 async function main(): Promise<void> {
   const options = parseArguments(process.argv.slice(2));
-  const policy = await loadPolicy();
   const apply = envBoolean(process.env.DRAFT_PR_APPLY);
   const allowedRepository =
     process.env.DRAFT_PR_ALLOWED_REPOSITORY?.trim() ||
     process.env.GITHUB_ALLOWED_REPOSITORY?.trim() ||
     "";
-  if (["prepare", "apply", "fail"].includes(options.command)) {
+  if (
+    ["prepare", "inspect-validation", "apply", "fail"].includes(options.command)
+  ) {
     assertBoundDraftPrTarget(
       options.repository,
       options.issueNumber!,
@@ -66,6 +73,16 @@ async function main(): Promise<void> {
       process.env,
     );
   }
+  if (options.command === "inspect-validation") {
+    assertAllowedRepository(options.repository, allowedRepository);
+    const result = await fingerprintDraftPrWorkspace(
+      process.env.DRAFT_PR_WORKSPACE_ROOT?.trim() || "/draft-pr-workspaces",
+      options.workspacePath!,
+    );
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  const policy = await loadPolicy();
   const token = await resolveGitHubToken(options.repository);
   const provider = new GitHubClient({
     ...(token ? { token } : {}),
@@ -200,6 +217,7 @@ function parseArguments(args: string[]): CLIOptions {
   const command = args.shift();
   if (
     command !== "prepare" &&
+    command !== "inspect-validation" &&
     command !== "apply" &&
     command !== "fail" &&
     command !== "prepare-review" &&
@@ -223,6 +241,7 @@ function parseArguments(args: string[]): CLIOptions {
   let headSha = "";
   let checkSuiteId = 0;
   let attempts = 0;
+  let workspacePath = "";
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--repository") {
@@ -251,6 +270,8 @@ function parseArguments(args: string[]): CLIOptions {
       checkSuiteId = Number(requiredArgumentValue(args, ++index, argument));
     } else if (argument === "--attempts") {
       attempts = Number(requiredArgumentValue(args, ++index, argument));
+    } else if (argument === "--workspace") {
+      workspacePath = requiredArgumentValue(args, ++index, argument);
     } else {
       throw new Error(`unknown argument: ${argument}`);
     }
@@ -259,7 +280,7 @@ function parseArguments(args: string[]): CLIOptions {
     throw new Error("--repository must use owner/repository format");
   }
   if (
-    ["prepare", "apply", "fail"].includes(command) &&
+    ["prepare", "inspect-validation", "apply", "fail"].includes(command) &&
     (!Number.isSafeInteger(issueNumber) || issueNumber <= 0)
   ) {
     throw new Error("--issue must be a positive integer");
@@ -279,6 +300,9 @@ function parseArguments(args: string[]): CLIOptions {
   }
   if (command === "prepare" && trigger !== "ready" && trigger !== "approved") {
     throw new Error("prepare requires --trigger ready or approved");
+  }
+  if (command === "inspect-validation" && !workspacePath) {
+    throw new Error("inspect-validation requires --workspace");
   }
   if (
     command === "prepare-review" &&
@@ -310,6 +334,7 @@ function parseArguments(args: string[]): CLIOptions {
       ? { checkSuiteId }
       : {}),
     ...(Number.isSafeInteger(attempts) && attempts >= 0 ? { attempts } : {}),
+    ...(workspacePath ? { workspacePath } : {}),
   };
 }
 

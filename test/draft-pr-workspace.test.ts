@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  fingerprintDraftPrWorkspace,
   GitDraftPrWorkspace,
   gitCurlResolveEnvironment,
 } from "../src/draft-pr/workspace.js";
@@ -36,13 +37,27 @@ describe("Git Draft PR workspace", () => {
     await writeFile(path.join(workspacePath, "tracked.txt"), "changed\n");
     await writeFile(path.join(workspacePath, "new.txt"), "new\n");
 
+    const fingerprint = await fingerprintDraftPrWorkspace(
+      path.dirname(path.dirname(path.dirname(workspacePath))),
+      workspacePath,
+    );
+    expect(fingerprint.headCommit).toBe(head);
+    expect(fingerprint.changeFingerprint).toMatch(/^[0-9a-f]{40,64}$/);
+    expect(git(workspacePath, "diff", "--cached", "--name-only")).toBe("");
+
     const inspection = await workspace.inspect(workspacePath);
 
     expect(inspection.headCommit).toBe(head);
+    expect(inspection.changeFingerprint).toMatch(/^[0-9a-f]{40,64}$/);
     expect(inspection.changedFiles).toEqual(["new.txt", "tracked.txt"]);
     expect(inspection.diffCheckPassed).toBe(true);
     expect(inspection.additions).toBeGreaterThan(0);
     expect(inspection.secretFindingPaths).toEqual([]);
+
+    const originalFingerprint = inspection.changeFingerprint;
+    await writeFile(path.join(workspacePath, "new.txt"), "updated\n");
+    const updatedInspection = await workspace.inspect(workspacePath);
+    expect(updatedInspection.changeFingerprint).not.toBe(originalFingerprint);
   });
 
   it("reports only paths when added lines resemble credential material", async () => {

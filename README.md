@@ -32,6 +32,13 @@ The trusted outer tool validates the Issue context, repository state, diff,
 tests, secrets, and policy gates before it creates a commit, pushes
 `codex/issue-<number>`, and opens a Draft PR.
 
+If the required local validation gates fail after implementation, the
+Scheduler can ask the Agent to repair those failures in the same workspace
+using `fix_validation`. Each repair is followed by a fresh deterministic
+validation run; the policy bounds the number of repair attempts before the
+Issue is marked failed. This local repair path is separate from Webhook-driven
+`fix_ci` runs on an existing Pull Request.
+
 The workflow never merges, marks a PR ready, closes an Issue, or force-pushes.
 
 ### Pull Request fixes

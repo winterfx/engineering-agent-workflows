@@ -46,6 +46,7 @@ const policy: DraftPrPolicy = {
   maxChangedFiles: 40,
   maxChangedLines: 1500,
   maxReviewComments: 50,
+  maxValidationFixIterations: 2,
   maxFixIterations: 3,
   requiredValidationGates: ["task-prepare", "task-lint", "task-test-unit"],
   approvalPathPrefixes: [".github/workflows/", "migrations/"],
@@ -175,6 +176,7 @@ class FakeWorkspace implements DraftPrWorkspace {
   prepareError?: Error;
   inspection: DraftPrInspection = {
     headCommit: "a".repeat(40),
+    changeFingerprint: "c".repeat(40),
     changedFiles: ["pkg/webhooks/store.go", "pkg/webhooks/store_test.go"],
     additions: 24,
     deletions: 8,

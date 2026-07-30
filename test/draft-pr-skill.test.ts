@@ -40,11 +40,15 @@ describe("Draft PR skill validation policy", () => {
     expect(skill).toContain(
       "Do\n   not run the repository's complete validation matrix unless the active",
     );
-    expect(skill).toContain(
-      "the trusted Scheduler independently runs the\n   policy's required gates in a credential-free sandbox",
+    expect(skill).toMatch(
+      /the trusted Scheduler\s+independently runs the policy's required gates in a credential-free\s+sandbox/,
     );
+    expect(skill).toMatch(
+      /any failure blocks commit and push regardless of the Agent's\s+reported results/,
+    );
+    expect(skill).toContain("For `fix_validation` mode:");
     expect(skill).toContain(
-      "any failure blocks\n   commit and push regardless of the Agent's reported results",
+      "The Scheduler will independently rerun every required gate after the repair",
     );
     expect(skill).toContain("do not run unrelated CI gates");
   });

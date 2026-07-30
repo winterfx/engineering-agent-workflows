@@ -23,6 +23,7 @@ export const draftPrPolicySchema = object({
   maxChangedFiles: number().int().positive().max(1000),
   maxChangedLines: number().int().positive().max(100_000),
   maxReviewComments: number().int().positive().max(100),
+  maxValidationFixIterations: number().int().positive().max(20),
   maxFixIterations: number().int().positive().max(20),
   requiredValidationGates: array(
     enumType(["task-prepare", "task-lint", "task-test-unit"]),

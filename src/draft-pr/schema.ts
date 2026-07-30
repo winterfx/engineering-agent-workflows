@@ -40,6 +40,7 @@ export type DraftPrSubmission = Infer<typeof draftPrSubmissionSchema>;
 
 export interface DraftPrInspection {
   headCommit: string;
+  changeFingerprint: string;
   changedFiles: string[];
   additions: number;
   deletions: number;
