@@ -7,6 +7,38 @@ import {
 } from "zod";
 import { ISSUE_FINGERPRINT_PATTERN } from "../issues/fingerprint.js";
 
+export const validationOverrideSchema = object({
+  classification: enumType(["environment_related"]),
+  source: enumType(["agent"]),
+  reason: string().min(1).max(1000),
+  failedCommands: array(string().min(1).max(300)).min(1).max(20),
+});
+
+interface ValidationOverrideAnalysis {
+  tests: Array<{ command: string; status: "passed" | "failed" | "not_run" }>;
+  validationOverride?: Infer<typeof validationOverrideSchema> | undefined;
+}
+
+export function hasConsistentEnvironmentValidationOverride(
+  analysis: ValidationOverrideAnalysis,
+): boolean {
+  const override = analysis.validationOverride;
+  if (!override) return false;
+  const failedCommands = [
+    ...new Set(
+      analysis.tests
+        .filter((test) => test.status === "failed")
+        .map((test) => test.command),
+    ),
+  ];
+  const overrideCommands = [...new Set(override.failedCommands)];
+  return (
+    failedCommands.length > 0 &&
+    failedCommands.length === overrideCommands.length &&
+    failedCommands.every((command) => overrideCommands.includes(command))
+  );
+}
+
 export const draftPrAnalysisSchema = object({
   outcome: enumType(["implemented", "needs_approval", "blocked", "no_change"]),
   prTitle: string().max(120),
@@ -23,6 +55,7 @@ export const draftPrAnalysisSchema = object({
     reasons: array(string().min(1).max(500)).max(8),
   }),
   notes: array(string().min(1).max(500)).max(8),
+  validationOverride: validationOverrideSchema.optional(),
 });
 
 export const draftPrSubmissionSchema = object({

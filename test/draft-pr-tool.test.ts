@@ -519,4 +519,79 @@ describe("Draft PR tool", () => {
     expect(workspace.commitCalls).toBe(0);
     expect(provider.createdPullRequests).toEqual([]);
   });
+
+  it("opens a Draft Pull Request for an Agent-classified environment failure", async () => {
+    const provider = new FakeProvider();
+    const workspace = new FakeWorkspace();
+    const deps = dependencies(provider, workspace);
+    const prepared = await prepareDraftPr(
+      repository,
+      issue.number,
+      "ready",
+      deps,
+    );
+    const input = submission(prepared);
+    input.analysis = {
+      ...analysis,
+      tests: [
+        {
+          command: "task test:unit",
+          status: "failed",
+          details: "Sandbox runtime dependency is unavailable.",
+        },
+      ],
+      validationOverride: {
+        classification: "environment_related",
+        source: "agent",
+        reason: "The sandbox runtime dependency is unavailable.",
+        failedCommands: ["task test:unit"],
+      },
+    };
+
+    const result = await applyDraftPr(repository, issue.number, input, deps);
+
+    expect(result.outcome).toBe("implemented");
+    expect(workspace.commitCalls).toBe(1);
+    expect(provider.createdPullRequests).toHaveLength(1);
+    expect(provider.createdPullRequests[0]?.body).toContain(
+      "`task test:unit` — failed",
+    );
+    expect(provider.createdPullRequests[0]?.body).toContain(
+      "environment_related",
+    );
+  });
+
+  it("rejects an environment override that does not match failed tests", async () => {
+    const provider = new FakeProvider();
+    const workspace = new FakeWorkspace();
+    const deps = dependencies(provider, workspace);
+    const prepared = await prepareDraftPr(
+      repository,
+      issue.number,
+      "ready",
+      deps,
+    );
+    const input = submission(prepared);
+    input.analysis = {
+      ...analysis,
+      tests: [
+        {
+          command: "task test:unit",
+          status: "failed",
+          details: "failed",
+        },
+      ],
+      validationOverride: {
+        classification: "environment_related",
+        source: "agent",
+        reason: "Environment failure.",
+        failedCommands: ["task lint"],
+      },
+    };
+
+    await expect(
+      applyDraftPr(repository, issue.number, input, deps),
+    ).rejects.toThrow("inconsistent validation override");
+    expect(workspace.commitCalls).toBe(0);
+  });
 });

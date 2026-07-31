@@ -47,8 +47,12 @@ tool to inspect.
   cause, corrective action, and final evidence. Never omit an unresolved
   failure from `tests` or relabel it as `passed`.
 - Include every unresolved preparation or validation failure in `tests` and
-  return `blocked`. Do not block merely because intentionally deferred provider
-  CI has not run yet.
+  normally return `blocked`. During a Scheduler-supplied validation-repair
+  attempt, a failure proven to come from the execution environment may retain
+  the mode's success outcome with `validationAssessment.classification` set to
+  `environment_related`; keep the failed test status and explain the evidence.
+  Do not block merely because intentionally deferred provider CI has not run
+  yet.
 - Never claim a deferred heavyweight provider gate passed locally. When focused
   and unit evidence verifies the repair, report the failure disposition from
   that evidence, record the heavyweight command as `not_run` when relevant,
@@ -80,8 +84,11 @@ For `fix_validation` mode:
 - Preserve the original implementation summary and Pull Request title when
   they remain accurate. Update `tests` so an initially failed command that now
   passes records the failure, diagnosis, correction, and final rerun evidence.
-- Return `blocked` for missing tools, infrastructure failures, timeouts, or
-  failures that cannot safely be attributed to the repository change. Use
+- For missing tools, infrastructure failures, timeouts, or other failures that
+  cannot be attributed to repository code, use the structured
+  `validationAssessment` supplied by the Scheduler schema. Select
+  `environment_related` only with concrete evidence, `uncertain` when the cause
+  is ambiguous, and never report the failed gate as passed. Use
   `needs_approval` if the repair would enter approval-gated scope.
 
 For `fix_review` mode:
@@ -156,7 +163,20 @@ and return `blocked`.
 ## fix_validation output
 
 Return the same object as `implement_issue output`, updated to describe the
-repaired workspace and final local validation results.
+repaired workspace and final local validation results. When the Scheduler
+schema includes `validationAssessment`, also return:
+
+```json
+{
+  "validationAssessment": {
+    "classification": "code_related | environment_related | uncertain",
+    "reason": "Evidence supporting the classification"
+  }
+}
+```
+
+This is an additional field in the normal mode object, not a standalone
+response. Use it only for a Scheduler-supplied validation-repair attempt.
 
 ## fix_review output
 

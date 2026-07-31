@@ -21,6 +21,7 @@ import {
 } from "./repository.js";
 import {
   draftPrSubmissionSchema,
+  hasConsistentEnvironmentValidationOverride,
   type DraftPrAnalysis,
   type DraftPrInspection,
 } from "./schema.js";
@@ -565,7 +566,18 @@ function validateImplementedAnalysis(
       `possible credential material detected in: ${inspection.secretFindingPaths.join(", ")}`,
     );
   }
-  if (analysis.tests.some((test) => test.status === "failed")) {
+  if (
+    analysis.validationOverride &&
+    !hasConsistentEnvironmentValidationOverride(analysis)
+  ) {
+    throw new Error(
+      "implemented result has an inconsistent validation override",
+    );
+  }
+  if (
+    analysis.tests.some((test) => test.status === "failed") &&
+    !hasConsistentEnvironmentValidationOverride(analysis)
+  ) {
     throw new Error("implemented result reports a failed validation command");
   }
 }
@@ -610,6 +622,16 @@ function buildPullRequestBody(
         `- \`${sanitizeCode(test.command)}\` — ${test.status}${test.details ? `: ${sanitizeLine(test.details)}` : ""}`,
       );
     }
+  }
+  if (analysis.validationOverride) {
+    lines.push(
+      "",
+      "## Validation override",
+      "",
+      `- Classification: \`${analysis.validationOverride.classification}\``,
+      `- Source: \`${analysis.validationOverride.source}\``,
+      `- Reason: ${sanitizeLine(analysis.validationOverride.reason)}`,
+    );
   }
   lines.push("", "## Risk", "", `- Level: \`${analysis.risk.level}\``);
   for (const reason of analysis.risk.reasons) {

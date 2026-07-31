@@ -27,7 +27,10 @@ import {
   type ReviewFixAnalysis,
   type ReviewFixSubmission,
 } from "./review-schema.js";
-import type { DraftPrInspection } from "./schema.js";
+import {
+  hasConsistentEnvironmentValidationOverride,
+  type DraftPrInspection,
+} from "./schema.js";
 import type { DraftPrToolDependencies } from "./tool.js";
 import { DraftPrWorkspaceLockError } from "./workspace.js";
 
@@ -566,7 +569,18 @@ function validateFixedReview(
       `possible credential material detected in: ${inspection.secretFindingPaths.join(", ")}`,
     );
   }
-  if (analysis.tests.some((test) => test.status === "failed")) {
+  if (
+    analysis.validationOverride &&
+    !hasConsistentEnvironmentValidationOverride(analysis)
+  ) {
+    throw new Error(
+      "fixed review result has an inconsistent validation override",
+    );
+  }
+  if (
+    analysis.tests.some((test) => test.status === "failed") &&
+    !hasConsistentEnvironmentValidationOverride(analysis)
+  ) {
     throw new Error("fixed review result reports a failed validation command");
   }
 }

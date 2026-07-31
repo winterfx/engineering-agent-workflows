@@ -142,6 +142,22 @@ describe("Draft PR Scheduler script", () => {
     expect(workspaceValidation?.script).toContain("task lint");
     expect(workspaceValidation?.script).toContain("task test:unit");
     expect(workspaceValidation?.script).toContain("[validation:failed:");
+    for (const variable of [
+      "LLM_API_ENDPOINT",
+      "LLM_API_PROTOCOL",
+      "LLM_API_KEY",
+      "OPENAI_API_KEY",
+      "OPENAI_BASE_URL",
+      "LLM_MODEL",
+      "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_API_ENDPOINT",
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_MODEL",
+      "CLAUDE_MODEL",
+    ]) {
+      expect(workspaceValidation?.script).toContain(variable);
+    }
     expect(workspaceValidation?.script.indexOf("task prepare")).toBeLessThan(
       workspaceValidation?.script.indexOf("task lint") ?? -1,
     );
@@ -167,6 +183,11 @@ describe("Draft PR Scheduler script", () => {
       expect.objectContaining({
         version: 1,
         maxValidationFixIterations: 2,
+        requiredValidationGates: [
+          "task-prepare",
+          "task-lint",
+          "task-test-unit",
+        ],
       }),
     );
   });
@@ -372,11 +393,112 @@ describe("Draft PR Scheduler script", () => {
     expect(result).toEqual({ ok: true, applied: true, outcome: "failed" });
   });
 
-  it("repairs a failed local validation gate before apply", async () => {
+  it("retries only failed gates and records a canonical environment mismatch", async () => {
+    const handlers = new Map<string, (event: unknown) => unknown>();
+    const commands: string[] = [];
+    const validationScripts: string[] = [];
+    let agentCalls = 0;
+    let appliedAnalysis: Record<string, unknown> | undefined;
+    const context = vm.createContext({
+      scheduler: {
+        on(
+          topic: string,
+          _triggerID: string,
+          handler: (event: unknown) => unknown,
+        ) {
+          handlers.set(topic, handler);
+        },
+        interval() {},
+        shell(script: string, options: { env: Record<string, string> }) {
+          const command = schedulerCommand(options.env);
+          commands.push(command);
+          if (command === "validate-workspace") {
+            validationScripts.push(script);
+            return validationScripts.length === 1
+              ? {
+                  success: false,
+                  stdout:
+                    "[validation:failed:1] task lint\n" +
+                    "diagnostic mentions ] task test:unit but is not a failure marker",
+                }
+              : { success: true, stdout: "lint passed on retry" };
+          }
+          if (options.env.DRAFT_PR_COMMAND === "apply") {
+            appliedAnalysis = JSON.parse(
+              options.env.DRAFT_PR_SUBMISSION ?? "",
+            ).analysis;
+          }
+          const result =
+            options.env.DRAFT_PR_COMMAND === "prepare"
+              ? {
+                  ok: true,
+                  trigger: "ready",
+                  issueFingerprint: "a".repeat(20),
+                  workspacePath:
+                    "/draft-pr-workspaces/repositories/0123456789abcdef/issue-439",
+                  branch: "codex/issue-439",
+                  baseBranch: "main",
+                  baseCommit: "b".repeat(40),
+                }
+              : { ok: true, applied: true, outcome: "implemented" };
+          return { success: true, stdout: JSON.stringify(result) };
+        },
+        agent() {
+          agentCalls += 1;
+          return {
+            success: true,
+            finalText: JSON.stringify({
+              outcome: "implemented",
+              prTitle: "fix: validate webhook configuration",
+              summary: ["Validate webhook configuration."],
+              tests: [],
+              risk: { level: "low", reasons: [] },
+              notes: [],
+            }),
+          };
+        },
+      },
+    });
+    new vm.Script(await schedulerScript()).runInContext(context);
+
+    const result = handlers.get("webhook.github.issues")?.({
+      payload: {
+        body: {
+          action: "labeled",
+          label: { name: "agent:ready" },
+          issue: { number: 439 },
+          repository: { full_name: "chaitin/agent-compose" },
+        },
+      },
+    });
+
+    expect(commands).toEqual([
+      "prepare",
+      "prepare-workspace",
+      "validate-workspace",
+      "validate-workspace",
+      "apply",
+    ]);
+    expect(agentCalls).toBe(1);
+    expect(validationScripts[1]).toContain("task lint");
+    expect(validationScripts[1]).not.toContain("task prepare");
+    expect(validationScripts[1]).not.toContain("task test:unit");
+    expect(appliedAnalysis?.tests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: "task lint",
+          status: "passed",
+          details: expect.stringContaining("environment_mismatch"),
+        }),
+      ]),
+    );
+    expect(result).toEqual({ ok: true, applied: true, outcome: "implemented" });
+  });
+
+  it("applies an Agent-classified environment-related gate failure", async () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     const commands: string[] = [];
     const agentPrompts: string[] = [];
-    let validationCalls = 0;
     let inspectionCalls = 0;
     let appliedAnalysis: Record<string, unknown> | undefined;
     const context = vm.createContext({
@@ -393,13 +515,161 @@ describe("Draft PR Scheduler script", () => {
           const command = schedulerCommand(options.env);
           commands.push(command);
           if (command === "validate-workspace") {
+            return {
+              success: false,
+              stdout:
+                "[validation:failed:1] task test:unit\n" +
+                "sandbox cannot reach an isolated runtime dependency",
+            };
+          }
+          if (command === "inspect-validation") {
+            inspectionCalls += 1;
+            return {
+              success: true,
+              stdout: JSON.stringify({
+                headCommit: "b".repeat(40),
+                changeFingerprint: "c".repeat(40),
+              }),
+            };
+          }
+          if (options.env.DRAFT_PR_COMMAND === "apply") {
+            appliedAnalysis = JSON.parse(
+              options.env.DRAFT_PR_SUBMISSION ?? "",
+            ).analysis;
+          }
+          const result =
+            options.env.DRAFT_PR_COMMAND === "prepare"
+              ? {
+                  ok: true,
+                  trigger: "ready",
+                  issueFingerprint: "a".repeat(20),
+                  workspacePath:
+                    "/draft-pr-workspaces/repositories/0123456789abcdef/issue-439",
+                  branch: "codex/issue-439",
+                  baseBranch: "main",
+                  baseCommit: "b".repeat(40),
+                }
+              : { ok: true, applied: true, outcome: "implemented" };
+          return { success: true, stdout: JSON.stringify(result) };
+        },
+        agent(prompt: string) {
+          agentPrompts.push(prompt);
+          return {
+            success: true,
+            finalText: JSON.stringify({
+              outcome: "implemented",
+              prTitle: "fix: validate webhook configuration",
+              summary: ["Validate webhook configuration."],
+              tests:
+                agentPrompts.length === 1
+                  ? []
+                  : [
+                      {
+                        command: "task test:unit",
+                        status: "failed",
+                        details:
+                          "Repository-focused tests pass, but the sandbox runtime dependency is unavailable.",
+                      },
+                    ],
+              risk: {
+                level: "medium",
+                reasons: ["Full unit gate is pending."],
+              },
+              notes: [],
+              ...(agentPrompts.length === 1
+                ? {}
+                : {
+                    validationAssessment: {
+                      classification: "environment_related",
+                      reason:
+                        "The failure is an unavailable sandbox runtime dependency and is unrelated to the repository diff.",
+                    },
+                  }),
+            }),
+          };
+        },
+      },
+    });
+    new vm.Script(await schedulerScript()).runInContext(context);
+
+    const result = handlers.get("webhook.github.issues")?.({
+      payload: {
+        body: {
+          action: "labeled",
+          label: { name: "agent:ready" },
+          issue: { number: 439 },
+          repository: { full_name: "chaitin/agent-compose" },
+        },
+      },
+    });
+
+    expect(commands).toEqual([
+      "prepare",
+      "prepare-workspace",
+      "validate-workspace",
+      "validate-workspace",
+      "inspect-validation",
+      "inspect-validation",
+      "apply",
+    ]);
+    expect(inspectionCalls).toBe(2);
+    expect(agentPrompts).toHaveLength(2);
+    expect(agentPrompts[1]).toContain("environment_related");
+    expect(agentPrompts[1]).toContain("Do not run Integration, E2E");
+    expect(appliedAnalysis).toEqual(
+      expect.objectContaining({
+        outcome: "implemented",
+        validationOverride: {
+          classification: "environment_related",
+          source: "agent",
+          reason:
+            "The failure is an unavailable sandbox runtime dependency and is unrelated to the repository diff.",
+          failedCommands: ["task test:unit"],
+        },
+        tests: expect.arrayContaining([
+          expect.objectContaining({
+            command: "task test:unit",
+            status: "failed",
+            details: expect.stringContaining("environment_related"),
+          }),
+        ]),
+      }),
+    );
+    expect(result).toEqual({ ok: true, applied: true, outcome: "implemented" });
+  });
+
+  it("repairs a failed local validation gate before apply", async () => {
+    const handlers = new Map<string, (event: unknown) => unknown>();
+    const commands: string[] = [];
+    const agentPrompts: string[] = [];
+    const validationScripts: string[] = [];
+    let validationCalls = 0;
+    let inspectionCalls = 0;
+    let appliedAnalysis: Record<string, unknown> | undefined;
+    const context = vm.createContext({
+      scheduler: {
+        on(
+          topic: string,
+          _triggerID: string,
+          handler: (event: unknown) => unknown,
+        ) {
+          handlers.set(topic, handler);
+        },
+        interval() {},
+        shell(script: string, options: { env: Record<string, string> }) {
+          const command = schedulerCommand(options.env);
+          commands.push(command);
+          if (command === "validate-workspace") {
+            validationScripts.push(script);
             validationCalls += 1;
-            if (validationCalls > 1) {
+            if (validationCalls > 2) {
               return { success: true, stdout: "validation passed" };
             }
             return {
               success: false,
-              stdout: "task lint: staticcheck failed",
+              stdout:
+                "[validation:failed:1] task lint\n" +
+                "task lint: staticcheck failed",
             };
           }
           if (command === "inspect-validation") {
@@ -475,15 +745,20 @@ describe("Draft PR Scheduler script", () => {
       "prepare",
       "prepare-workspace",
       "validate-workspace",
+      "validate-workspace",
       "inspect-validation",
       "inspect-validation",
       "validate-workspace",
       "apply",
     ]);
     expect(agentPrompts).toHaveLength(2);
+    expect(agentPrompts[0]).toContain("Run only focused checks");
     expect(agentPrompts[1]).toContain("fix_validation mode");
     expect(agentPrompts[1]).toContain("task lint: staticcheck failed");
     expect(agentPrompts[1]).toContain('"attempt":1');
+    expect(validationScripts[1]).toContain("task lint");
+    expect(validationScripts[1]).not.toContain("task prepare");
+    expect(validationScripts[1]).not.toContain("task test:unit");
     expect(appliedAnalysis?.tests).toEqual([
       {
         command: "task prepare",
@@ -590,6 +865,7 @@ describe("Draft PR Scheduler script", () => {
       "prepare",
       "prepare-workspace",
       "validate-workspace",
+      "validate-workspace",
       "inspect-validation",
       "inspect-validation",
       "fail",
@@ -685,11 +961,14 @@ describe("Draft PR Scheduler script", () => {
       "prepare",
       "prepare-workspace",
       "validate-workspace",
-      "inspect-validation",
-      "inspect-validation",
       "validate-workspace",
       "inspect-validation",
       "inspect-validation",
+      "validate-workspace",
+      "validate-workspace",
+      "inspect-validation",
+      "inspect-validation",
+      "validate-workspace",
       "validate-workspace",
       "fail",
     ]);
@@ -802,6 +1081,146 @@ describe("Draft PR Scheduler script", () => {
     ]);
     expect(calls[0]).toEqual(
       expect.objectContaining({ DRAFT_PR_REVIEW_ID: "700" }),
+    );
+    expect(result).toEqual({ ok: true, applied: true, outcome: "fixed" });
+  });
+
+  it("repairs a failed Review gate before apply and preserves dispositions", async () => {
+    const handlers = new Map<string, (event: unknown) => unknown>();
+    const commands: string[] = [];
+    const agentPrompts: string[] = [];
+    let validationCalls = 0;
+    let inspectionCalls = 0;
+    let appliedAnalysis: Record<string, unknown> | undefined;
+    const expectedHeadSha = "a".repeat(40);
+    const context = vm.createContext({
+      scheduler: {
+        on(
+          topic: string,
+          _triggerID: string,
+          handler: (event: unknown) => unknown,
+        ) {
+          handlers.set(topic, handler);
+        },
+        interval() {},
+        shell(_script: string, options: { env: Record<string, string> }) {
+          const command = schedulerCommand(options.env);
+          commands.push(command);
+          if (command === "validate-workspace") {
+            validationCalls += 1;
+            return validationCalls <= 2
+              ? {
+                  success: false,
+                  stdout:
+                    "[validation:failed:1] task test:unit\nassertion failed",
+                }
+              : { success: true, stdout: "validation passed" };
+          }
+          if (command === "inspect-validation") {
+            inspectionCalls += 1;
+            return {
+              success: true,
+              stdout: JSON.stringify({
+                headCommit: expectedHeadSha,
+                changeFingerprint: String(inspectionCalls).repeat(40),
+              }),
+            };
+          }
+          if (options.env.DRAFT_PR_COMMAND === "apply-review") {
+            appliedAnalysis = JSON.parse(
+              options.env.DRAFT_PR_SUBMISSION ?? "",
+            ).analysis;
+          }
+          const result =
+            options.env.DRAFT_PR_COMMAND === "prepare-review"
+              ? {
+                  ok: true,
+                  workspacePath:
+                    "/draft-pr-workspaces/repositories/0123456789abcdef/pr-440",
+                  branch: "codex/issue-439",
+                  baseBranch: "main",
+                  expectedHeadSha,
+                  reviewId: 700,
+                  reviewFingerprint: "b".repeat(20),
+                  previousReviewCursor: 0,
+                  previousIterations: 0,
+                  findings: [
+                    {
+                      source: "review",
+                      commentId: 700,
+                      body: "Please address recovery behavior.",
+                    },
+                  ],
+                }
+              : { ok: true, applied: true, outcome: "fixed" };
+          return { success: true, stdout: JSON.stringify(result) };
+        },
+        agent(prompt: string) {
+          agentPrompts.push(prompt);
+          return {
+            success: true,
+            finalText: JSON.stringify({
+              outcome: "fixed",
+              commitTitle: "fix: address requested changes",
+              summary: ["Address the Review finding."],
+              findings: [
+                {
+                  source: "review",
+                  commentId: 700,
+                  disposition:
+                    agentPrompts.length === 1 ? "fixed" : "not_reproducible",
+                  reason: "Verified during focused repair.",
+                },
+              ],
+              tests: [],
+              risk: { level: "low", reasons: [] },
+              notes: [],
+            }),
+          };
+        },
+      },
+    });
+    new vm.Script(await schedulerScript()).runInContext(context);
+
+    const result = handlers.get("webhook.github.pull_request_review")?.({
+      payload: {
+        body: {
+          action: "submitted",
+          pull_request: { number: 440 },
+          review: { id: 700, state: "changes_requested" },
+          repository: { full_name: "chaitin/agent-compose" },
+        },
+      },
+    });
+
+    expect(commands).toEqual([
+      "prepare-review",
+      "prepare-workspace",
+      "validate-workspace",
+      "validate-workspace",
+      "inspect-validation",
+      "inspect-validation",
+      "validate-workspace",
+      "apply-review",
+    ]);
+    expect(agentPrompts).toHaveLength(2);
+    expect(agentPrompts[0]).toContain("Run only focused checks");
+    expect(agentPrompts[1]).toContain("fix_review mode");
+    expect(agentPrompts[1]).toContain('"attempt":1');
+    expect(appliedAnalysis?.findings).toEqual([
+      expect.objectContaining({
+        commentId: 700,
+        disposition: "fixed",
+      }),
+    ]);
+    expect(appliedAnalysis?.tests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: "task test:unit",
+          status: "passed",
+          details: expect.stringContaining("1 local validation repair attempt"),
+        }),
+      ]),
     );
     expect(result).toEqual({ ok: true, applied: true, outcome: "fixed" });
   });
@@ -1075,6 +1494,154 @@ describe("Draft PR Scheduler script", () => {
         GITHUB_APP_PRIVATE_KEY_BASE64: "",
       }),
     );
+  });
+
+  it("repairs a failed CI gate before apply and preserves dispositions", async () => {
+    const handlers = new Map<string, (event: unknown) => unknown>();
+    const commands: string[] = [];
+    const agentPrompts: string[] = [];
+    let validationCalls = 0;
+    let inspectionCalls = 0;
+    let appliedAnalysis: Record<string, unknown> | undefined;
+    const headSha = "a".repeat(40);
+    const context = vm.createContext({
+      scheduler: {
+        on(
+          topic: string,
+          _triggerID: string,
+          handler: (event: unknown) => unknown,
+        ) {
+          handlers.set(topic, handler);
+        },
+        interval() {},
+        shell(_script: string, options: { env: Record<string, string> }) {
+          const command = schedulerCommand(options.env);
+          commands.push(command);
+          if (command === "validate-workspace") {
+            validationCalls += 1;
+            return validationCalls <= 2
+              ? {
+                  success: false,
+                  stdout: "[validation:failed:1] task lint\nstaticcheck failed",
+                }
+              : { success: true, stdout: "validation passed" };
+          }
+          if (command === "inspect-validation") {
+            inspectionCalls += 1;
+            return {
+              success: true,
+              stdout: JSON.stringify({
+                headCommit: headSha,
+                changeFingerprint: String(inspectionCalls).repeat(40),
+              }),
+            };
+          }
+          if (options.env.DRAFT_PR_COMMAND === "apply-ci") {
+            appliedAnalysis = JSON.parse(
+              options.env.DRAFT_PR_SUBMISSION ?? "",
+            ).analysis;
+          }
+          const result =
+            options.env.DRAFT_PR_COMMAND === "prepare-ci"
+              ? {
+                  ok: true,
+                  checkSuiteId: 88001,
+                  workspacePath:
+                    "/draft-pr-workspaces/repositories/0123456789abcdef/pr-440",
+                  branch: "codex/issue-439",
+                  baseBranch: "main",
+                  expectedHeadSha: headSha,
+                  failuresFingerprint: "b".repeat(20),
+                  previousAttempts: 0,
+                  failures: [
+                    {
+                      checkRunId: 701,
+                      name: "CI / lint",
+                      conclusion: "failure",
+                      output: { summary: "staticcheck failed" },
+                      annotations: [],
+                    },
+                  ],
+                }
+              : { ok: true, applied: true, outcome: "fixed" };
+          return { success: true, stdout: JSON.stringify(result) };
+        },
+        agent(prompt: string) {
+          agentPrompts.push(prompt);
+          return {
+            success: true,
+            finalText: JSON.stringify({
+              outcome: "fixed",
+              commitTitle: "fix: satisfy lint",
+              summary: ["Fix the lint failure."],
+              failures: [
+                {
+                  checkRunId: 701,
+                  disposition:
+                    agentPrompts.length === 1 ? "fixed" : "not_reproducible",
+                  reason: "Verified during focused repair.",
+                },
+              ],
+              tests: [],
+              risk: { level: "low", reasons: [] },
+              notes: [],
+            }),
+          };
+        },
+      },
+    });
+    new vm.Script(await schedulerScript()).runInContext(context);
+
+    const result = handlers.get("webhook.github.workflow_run")?.({
+      payload: {
+        body: {
+          action: "completed",
+          workflow_run: {
+            check_suite_id: 88001,
+            head_sha: headSha,
+            conclusion: "failure",
+            pull_requests: [{ number: 440 }],
+          },
+          repository: { full_name: "chaitin/agent-compose" },
+        },
+      },
+    });
+
+    expect(commands).toEqual([
+      "prepare-ci",
+      "prepare-workspace",
+      "validate-workspace",
+      "validate-workspace",
+      "inspect-validation",
+      "inspect-validation",
+      "validate-workspace",
+      "apply-ci",
+    ]);
+    expect(agentPrompts).toHaveLength(2);
+    expect(agentPrompts[0]).toContain("Run only focused checks");
+    expect(agentPrompts[1]).toContain("fix_ci mode");
+    expect(agentPrompts[1]).toContain('"attempt":1');
+    expect(appliedAnalysis?.failures).toEqual([
+      expect.objectContaining({
+        checkRunId: 701,
+        disposition: "fixed",
+      }),
+    ]);
+    expect(appliedAnalysis?.tests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: "task lint",
+          status: "passed",
+          details: expect.stringContaining("1 local validation repair attempt"),
+        }),
+      ]),
+    );
+    expect(result).toEqual({
+      ok: true,
+      repository: "chaitin/agent-compose",
+      checkSuiteId: 88001,
+      results: [{ ok: true, applied: true, outcome: "fixed" }],
+    });
   });
 
   it("ignores successful workflow runs without invoking a sandbox", async () => {

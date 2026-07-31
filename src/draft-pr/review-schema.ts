@@ -6,6 +6,7 @@ import {
   string,
   type infer as Infer,
 } from "zod";
+import { validationOverrideSchema } from "./schema.js";
 
 export const reviewFindingSourceSchema = enumType(["review", "review_comment"]);
 
@@ -38,6 +39,7 @@ export const reviewFixAnalysisSchema = object({
     reasons: array(string().min(1).max(500)).max(8),
   }),
   notes: array(string().min(1).max(500)).max(8),
+  validationOverride: validationOverrideSchema.optional(),
 });
 
 export const reviewFixSubmissionSchema = object({

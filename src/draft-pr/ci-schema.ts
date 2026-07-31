@@ -6,6 +6,7 @@ import {
   string,
   type infer as Infer,
 } from "zod";
+import { validationOverrideSchema } from "./schema.js";
 
 const ciCheckReferenceSchema = object({
   checkRunId: number().int().positive(),
@@ -36,6 +37,7 @@ export const ciFixAnalysisSchema = object({
     reasons: array(string().min(1).max(500)).max(8),
   }),
   notes: array(string().min(1).max(500)).max(8),
+  validationOverride: validationOverrideSchema.optional(),
 });
 
 export const ciFixSubmissionSchema = object({
