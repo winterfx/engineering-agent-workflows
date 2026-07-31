@@ -142,6 +142,7 @@ describe("Draft PR Scheduler script", () => {
     expect(workspaceValidation?.script).toContain("task lint");
     expect(workspaceValidation?.script).toContain("task test:unit");
     expect(workspaceValidation?.script).toContain("[validation:failed:");
+    expect(workspaceValidation?.script).toContain("[validation:case]");
     for (const variable of [
       "LLM_API_ENDPOINT",
       "LLM_API_PROTOCOL",
@@ -187,6 +188,12 @@ describe("Draft PR Scheduler script", () => {
           "task-prepare",
           "task-lint",
           "task-test-unit",
+        ],
+        allowedValidationFailureCases: [
+          "TestConfigStoreCRUDCoverageWorkflows",
+          "TestIntegrationConfigStoreCRUDCoverageWorkflows",
+          "TestE2EConfigStoreCRUDCoverageWorkflows",
+          "runtime command execution > injects runtime path environment into user commands",
         ],
       }),
     );
@@ -495,11 +502,10 @@ describe("Draft PR Scheduler script", () => {
     expect(result).toEqual({ ok: true, applied: true, outcome: "implemented" });
   });
 
-  it("applies an Agent-classified environment-related gate failure", async () => {
+  it("applies a policy-allowlisted test failure without retrying the gate", async () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     const commands: string[] = [];
     const agentPrompts: string[] = [];
-    let inspectionCalls = 0;
     let appliedAnalysis: Record<string, unknown> | undefined;
     const context = vm.createContext({
       scheduler: {
@@ -519,17 +525,11 @@ describe("Draft PR Scheduler script", () => {
               success: false,
               stdout:
                 "[validation:failed:1] task test:unit\n" +
-                "sandbox cannot reach an isolated runtime dependency",
-            };
-          }
-          if (command === "inspect-validation") {
-            inspectionCalls += 1;
-            return {
-              success: true,
-              stdout: JSON.stringify({
-                headCommit: "b".repeat(40),
-                changeFingerprint: "c".repeat(40),
-              }),
+                "[validation:case] --- FAIL: TestConfigStoreCRUDCoverageWorkflows (0.08s)\n" +
+                "[validation:case] --- FAIL: TestIntegrationConfigStoreCRUDCoverageWorkflows (0.08s)\n" +
+                "[validation:case] --- FAIL: TestE2EConfigStoreCRUDCoverageWorkflows (0.08s)\n" +
+                "[validation:case] FAIL test/command.test.ts > runtime command execution > injects runtime path environment into user commands\n" +
+                "RUNTIME_ROOT assertion failed",
             };
           }
           if (options.env.DRAFT_PR_COMMAND === "apply") {
@@ -560,31 +560,12 @@ describe("Draft PR Scheduler script", () => {
               outcome: "implemented",
               prTitle: "fix: validate webhook configuration",
               summary: ["Validate webhook configuration."],
-              tests:
-                agentPrompts.length === 1
-                  ? []
-                  : [
-                      {
-                        command: "task test:unit",
-                        status: "failed",
-                        details:
-                          "Repository-focused tests pass, but the sandbox runtime dependency is unavailable.",
-                      },
-                    ],
+              tests: [],
               risk: {
                 level: "medium",
                 reasons: ["Full unit gate is pending."],
               },
               notes: [],
-              ...(agentPrompts.length === 1
-                ? {}
-                : {
-                    validationAssessment: {
-                      classification: "environment_related",
-                      reason:
-                        "The failure is an unavailable sandbox runtime dependency and is unrelated to the repository diff.",
-                    },
-                  }),
             }),
           };
         },
@@ -607,30 +588,30 @@ describe("Draft PR Scheduler script", () => {
       "prepare",
       "prepare-workspace",
       "validate-workspace",
-      "validate-workspace",
-      "inspect-validation",
-      "inspect-validation",
       "apply",
     ]);
-    expect(inspectionCalls).toBe(2);
-    expect(agentPrompts).toHaveLength(2);
-    expect(agentPrompts[1]).toContain("environment_related");
-    expect(agentPrompts[1]).toContain("Do not run Integration, E2E");
+    expect(agentPrompts).toHaveLength(1);
     expect(appliedAnalysis).toEqual(
       expect.objectContaining({
         outcome: "implemented",
         validationOverride: {
-          classification: "environment_related",
-          source: "agent",
+          classification: "allowlisted_test_failure",
+          source: "policy",
           reason:
-            "The failure is an unavailable sandbox runtime dependency and is unrelated to the repository diff.",
+            "Allowlisted cases: TestConfigStoreCRUDCoverageWorkflows, TestIntegrationConfigStoreCRUDCoverageWorkflows, TestE2EConfigStoreCRUDCoverageWorkflows, runtime command execution > injects runtime path environment into user commands",
           failedCommands: ["task test:unit"],
+          allowedFailureCases: [
+            "TestConfigStoreCRUDCoverageWorkflows",
+            "TestIntegrationConfigStoreCRUDCoverageWorkflows",
+            "TestE2EConfigStoreCRUDCoverageWorkflows",
+            "runtime command execution > injects runtime path environment into user commands",
+          ],
         },
         tests: expect.arrayContaining([
           expect.objectContaining({
             command: "task test:unit",
             status: "failed",
-            details: expect.stringContaining("environment_related"),
+            details: expect.stringContaining("was not retried"),
           }),
         ]),
       }),
@@ -898,7 +879,10 @@ describe("Draft PR Scheduler script", () => {
           if (command === "validate-workspace") {
             return {
               success: false,
-              stdout: "task test:unit: assertion failed",
+              stdout:
+                "[validation:failed:1] task test:unit\n" +
+                "[validation:case] --- FAIL: TestUnexpectedRegression (0.01s)\n" +
+                "task test:unit: assertion failed",
             };
           }
           if (command === "inspect-validation") {

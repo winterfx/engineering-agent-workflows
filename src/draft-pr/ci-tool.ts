@@ -25,7 +25,7 @@ import {
   sanitizeTitle,
 } from "./repository.js";
 import {
-  hasConsistentEnvironmentValidationOverride,
+  hasConsistentValidationOverride,
   type DraftPrInspection,
 } from "./schema.js";
 import type { DraftPrToolDependencies } from "./tool.js";
@@ -481,13 +481,13 @@ function validateFixedAnalysis(
   }
   if (
     analysis.validationOverride &&
-    !hasConsistentEnvironmentValidationOverride(analysis)
+    !hasConsistentValidationOverride(analysis)
   ) {
     throw new Error("fixed CI result has an inconsistent validation override");
   }
   if (
     analysis.tests.some((test) => test.status === "failed") &&
-    !hasConsistentEnvironmentValidationOverride(analysis)
+    !hasConsistentValidationOverride(analysis)
   ) {
     throw new Error("fixed CI result reports a failed validation command");
   }

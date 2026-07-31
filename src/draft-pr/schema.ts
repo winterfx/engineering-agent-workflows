@@ -8,10 +8,11 @@ import {
 import { ISSUE_FINGERPRINT_PATTERN } from "../issues/fingerprint.js";
 
 export const validationOverrideSchema = object({
-  classification: enumType(["environment_related"]),
-  source: enumType(["agent"]),
+  classification: enumType(["allowlisted_test_failure"]),
+  source: enumType(["policy"]),
   reason: string().min(1).max(1000),
   failedCommands: array(string().min(1).max(300)).min(1).max(20),
+  allowedFailureCases: array(string().min(1).max(300)).min(1).max(50),
 });
 
 interface ValidationOverrideAnalysis {
@@ -19,7 +20,7 @@ interface ValidationOverrideAnalysis {
   validationOverride?: Infer<typeof validationOverrideSchema> | undefined;
 }
 
-export function hasConsistentEnvironmentValidationOverride(
+export function hasConsistentValidationOverride(
   analysis: ValidationOverrideAnalysis,
 ): boolean {
   const override = analysis.validationOverride;

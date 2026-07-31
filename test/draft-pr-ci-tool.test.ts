@@ -44,6 +44,7 @@ const policy: DraftPrPolicy = {
   maxValidationFixIterations: 2,
   maxFixIterations: 3,
   requiredValidationGates: ["task-prepare", "task-lint", "task-test-unit"],
+  allowedValidationFailureCases: [],
   approvalPathPrefixes: [".github/workflows/"],
   labelColors: {},
 };

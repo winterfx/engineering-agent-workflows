@@ -28,7 +28,7 @@ import {
   type ReviewFixSubmission,
 } from "./review-schema.js";
 import {
-  hasConsistentEnvironmentValidationOverride,
+  hasConsistentValidationOverride,
   type DraftPrInspection,
 } from "./schema.js";
 import type { DraftPrToolDependencies } from "./tool.js";
@@ -571,7 +571,7 @@ function validateFixedReview(
   }
   if (
     analysis.validationOverride &&
-    !hasConsistentEnvironmentValidationOverride(analysis)
+    !hasConsistentValidationOverride(analysis)
   ) {
     throw new Error(
       "fixed review result has an inconsistent validation override",
@@ -579,7 +579,7 @@ function validateFixedReview(
   }
   if (
     analysis.tests.some((test) => test.status === "failed") &&
-    !hasConsistentEnvironmentValidationOverride(analysis)
+    !hasConsistentValidationOverride(analysis)
   ) {
     throw new Error("fixed review result reports a failed validation command");
   }

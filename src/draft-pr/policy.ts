@@ -28,6 +28,7 @@ export const draftPrPolicySchema = object({
   requiredValidationGates: array(
     enumType(["task-prepare", "task-lint", "task-test-unit"]),
   ).min(1),
+  allowedValidationFailureCases: array(string().min(1).max(300)).max(50),
   approvalPathPrefixes: array(string().min(1)),
   labelColors: record(string(), string().regex(/^[0-9a-fA-F]{6}$/)),
 });

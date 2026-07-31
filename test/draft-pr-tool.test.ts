@@ -49,6 +49,7 @@ const policy: DraftPrPolicy = {
   maxValidationFixIterations: 2,
   maxFixIterations: 3,
   requiredValidationGates: ["task-prepare", "task-lint", "task-test-unit"],
+  allowedValidationFailureCases: [],
   approvalPathPrefixes: [".github/workflows/", "migrations/"],
   labelColors: {
     "agent:running": "fbca04",
@@ -520,7 +521,7 @@ describe("Draft PR tool", () => {
     expect(provider.createdPullRequests).toEqual([]);
   });
 
-  it("opens a Draft Pull Request for an Agent-classified environment failure", async () => {
+  it("opens a Draft Pull Request for a policy-allowlisted test failure", async () => {
     const provider = new FakeProvider();
     const workspace = new FakeWorkspace();
     const deps = dependencies(provider, workspace);
@@ -541,10 +542,13 @@ describe("Draft PR tool", () => {
         },
       ],
       validationOverride: {
-        classification: "environment_related",
-        source: "agent",
-        reason: "The sandbox runtime dependency is unavailable.",
+        classification: "allowlisted_test_failure",
+        source: "policy",
+        reason: "Known test isolation failure.",
         failedCommands: ["task test:unit"],
+        allowedFailureCases: [
+          "runtime command execution > injects runtime path environment into user commands",
+        ],
       },
     };
 
@@ -557,11 +561,11 @@ describe("Draft PR tool", () => {
       "`task test:unit` — failed",
     );
     expect(provider.createdPullRequests[0]?.body).toContain(
-      "environment_related",
+      "allowlisted_test_failure",
     );
   });
 
-  it("rejects an environment override that does not match failed tests", async () => {
+  it("rejects an allowlist override that does not match failed tests", async () => {
     const provider = new FakeProvider();
     const workspace = new FakeWorkspace();
     const deps = dependencies(provider, workspace);
@@ -582,10 +586,13 @@ describe("Draft PR tool", () => {
         },
       ],
       validationOverride: {
-        classification: "environment_related",
-        source: "agent",
-        reason: "Environment failure.",
+        classification: "allowlisted_test_failure",
+        source: "policy",
+        reason: "Known test isolation failure.",
         failedCommands: ["task lint"],
+        allowedFailureCases: [
+          "runtime command execution > injects runtime path environment into user commands",
+        ],
       },
     };
 

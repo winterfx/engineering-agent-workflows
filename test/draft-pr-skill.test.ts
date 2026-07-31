@@ -78,5 +78,11 @@ describe("Draft PR skill validation policy", () => {
     );
     expect(policy.requiredValidationGates).not.toContain("task-test-e2e");
     expect(policy.requiredValidationGates).not.toContain("task-test-coverage");
+    expect(policy.allowedValidationFailureCases).toEqual([
+      "TestConfigStoreCRUDCoverageWorkflows",
+      "TestIntegrationConfigStoreCRUDCoverageWorkflows",
+      "TestE2EConfigStoreCRUDCoverageWorkflows",
+      "runtime command execution > injects runtime path environment into user commands",
+    ]);
   });
 });

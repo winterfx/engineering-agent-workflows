@@ -101,18 +101,6 @@ const CANONICAL_VALIDATION_ENVIRONMENT_VARIABLES = [
   "CLAUDE_MODEL",
 ];
 const VALIDATION_GATE_OUTPUT_BYTES = 2000;
-const VALIDATION_ASSESSMENT_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["classification", "reason"],
-  properties: {
-    classification: {
-      type: "string",
-      enum: ["code_related", "environment_related", "uncertain"],
-    },
-    reason: { type: "string", minLength: 1, maxLength: 1000 },
-  },
-};
 
 function workflowPolicy() {
   try {
@@ -135,6 +123,36 @@ function requiredValidationCommands() {
     }
     return command;
   });
+}
+
+function allowedValidationFailureCases() {
+  const cases = workflowPolicy()?.allowedValidationFailureCases;
+  if (
+    !Array.isArray(cases) ||
+    cases.some((testCase) => typeof testCase !== "string" || !testCase.trim())
+  ) {
+    throw new Error(
+      "Draft PR policy requires allowedValidationFailureCases strings",
+    );
+  }
+  return [...new Set(cases.map((testCase) => testCase.trim()))];
+}
+
+function reportedValidationFailureCases(output) {
+  const normalized = output.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+  const cases = new Set();
+  for (const line of normalized.split(/\r?\n/)) {
+    if (!line.startsWith("[validation:case] ")) continue;
+    const diagnostic = line.slice("[validation:case] ".length).trim();
+    const goFailure = diagnostic.match(/--- FAIL: ([A-Za-z0-9_]+)/)?.[1];
+    if (goFailure) {
+      cases.add(goFailure);
+      continue;
+    }
+    const vitestFailure = diagnostic.match(/FAIL\s+\S+\s+>\s+(.+)$/)?.[1];
+    if (vitestFailure) cases.add(vitestFailure.trim());
+  }
+  return [...cases];
 }
 
 function maxValidationFixIterations() {
@@ -174,6 +192,11 @@ function validateAgentWorkspace(workspacePath, selectedCommands) {
         "  validation_status=$gate_status",
         '  echo "[validation:failed:$gate_status] ' + command + '"',
         "fi",
+        ...(command === "task test:unit"
+          ? [
+              'grep -aE -- "--- FAIL: [A-Za-z0-9_]+|FAIL .* > " "$validation_log" | sed "s/^/[validation:case] /" || true',
+            ]
+          : []),
         'tail -c "' +
           VALIDATION_GATE_OUTPUT_BYTES +
           '" "$validation_log" || true',
@@ -213,6 +236,15 @@ function validateAgentWorkspace(workspacePath, selectedCommands) {
     error.failedCommands = commands.filter((command) =>
       failedCommands.has(command),
     );
+    const reportedCases = reportedValidationFailureCases(output);
+    const allowedCases = new Set(allowedValidationFailureCases());
+    error.allowedFailureCases =
+      error.failedCommands.length === 1 &&
+      error.failedCommands[0] === "task test:unit" &&
+      reportedCases.length > 0 &&
+      reportedCases.every((testCase) => allowedCases.has(testCase))
+        ? reportedCases
+        : [];
     throw error;
   }
   return { commands };
@@ -222,8 +254,24 @@ function validateAgentWorkspaceWithRetry(workspacePath) {
   const requiredCommands = requiredValidationCommands();
   try {
     validateAgentWorkspace(workspacePath, requiredCommands);
-    return { commands: requiredCommands, environmentMismatch: false };
+    return {
+      commands: requiredCommands,
+      environmentMismatch: false,
+      allowedFailureCases: [],
+      failedCommands: [],
+    };
   } catch (firstError) {
+    const allowedFailureCases = Array.isArray(firstError?.allowedFailureCases)
+      ? firstError.allowedFailureCases
+      : [];
+    if (allowedFailureCases.length > 0) {
+      return {
+        commands: requiredCommands,
+        environmentMismatch: false,
+        allowedFailureCases,
+        failedCommands: firstError.failedCommands,
+      };
+    }
     const failedCommands = Array.isArray(firstError?.failedCommands)
       ? firstError.failedCommands
       : [];
@@ -231,7 +279,12 @@ function validateAgentWorkspaceWithRetry(workspacePath) {
       failedCommands.length > 0 ? failedCommands : requiredCommands;
     try {
       validateAgentWorkspace(workspacePath, retryCommands);
-      return { commands: requiredCommands, environmentMismatch: true };
+      return {
+        commands: requiredCommands,
+        environmentMismatch: true,
+        allowedFailureCases: [],
+        failedCommands: [],
+      };
     } catch (retryError) {
       const error = new Error(
         "Draft PR required validation remained failing after a canonical environment retry: " +
@@ -325,7 +378,6 @@ const ANALYSIS_SCHEMA = {
       maxItems: 8,
       items: { type: "string", minLength: 1, maxLength: 500 },
     },
-    validationAssessment: VALIDATION_ASSESSMENT_SCHEMA,
   },
 };
 
@@ -376,7 +428,6 @@ const REVIEW_ANALYSIS_SCHEMA = {
     tests: ANALYSIS_SCHEMA.properties.tests,
     risk: ANALYSIS_SCHEMA.properties.risk,
     notes: ANALYSIS_SCHEMA.properties.notes,
-    validationAssessment: VALIDATION_ASSESSMENT_SCHEMA,
   },
 };
 
@@ -420,7 +471,6 @@ const CI_ANALYSIS_SCHEMA = {
     tests: ANALYSIS_SCHEMA.properties.tests,
     risk: ANALYSIS_SCHEMA.properties.risk,
     notes: ANALYSIS_SCHEMA.properties.notes,
-    validationAssessment: VALIDATION_ASSESSMENT_SCHEMA,
   },
 };
 
@@ -557,24 +607,20 @@ function withRequiredValidationResults(
   };
 }
 
-function withEnvironmentRelatedValidationOverride(
+function withAllowedValidationFailures(
   analysis,
   commands,
   failedCommands,
-  repairAttempts,
+  allowedFailureCases,
 ) {
-  const assessment = analysis?.validationAssessment;
-  const reason = String(assessment?.reason || "")
-    .trim()
-    .slice(0, 1000);
   const requiredCommands = [...new Set(commands)];
   const failedCommandSet = new Set(failedCommands);
   const reportedTests = Array.isArray(analysis.tests) ? analysis.tests : [];
   const requiredCommandSet = new Set(requiredCommands);
   const overrideEvidence =
-    "Trusted Scheduler validation remained failing after a canonical environment retry. " +
-    "The validation-repair Agent classified the failure as environment_related" +
-    (reason ? ": " + reason : ".");
+    "Trusted Scheduler validation failed only in policy-allowlisted test cases: " +
+    allowedFailureCases.join(", ") +
+    ". The failed gate was not retried.";
   const requiredTests = requiredCommands.map((command) => {
     const reported = reportedTests.find(
       (test) => test && test.command === command,
@@ -586,7 +632,7 @@ function withEnvironmentRelatedValidationOverride(
     const failed = failedCommandSet.has(command);
     const evidence = failed
       ? overrideEvidence
-      : "Trusted Scheduler gate passed before the environment-related override.";
+      : "Trusted Scheduler gate passed before the allowlisted-test override.";
     return {
       command,
       status: failed ? "failed" : "passed",
@@ -603,22 +649,21 @@ function withEnvironmentRelatedValidationOverride(
         !requiredCommandSet.has(test.command),
     )
     .slice(0, Math.max(0, 20 - requiredTests.length));
-  const note =
-    "Validation override: Agent classified persistent gate failure as environment_related after " +
-    repairAttempts +
-    " assessment attempt" +
-    (repairAttempts === 1 ? "." : "s.");
+  const note = "Validation override: policy-allowlisted test failure.";
   const notes = Array.isArray(analysis.notes) ? analysis.notes : [];
-  const { validationAssessment: _assessment, ...baseAnalysis } = analysis;
   return {
-    ...baseAnalysis,
+    ...analysis,
     tests: [...advisoryTests, ...requiredTests],
     notes: [...notes.slice(0, 7), note],
     validationOverride: {
-      classification: "environment_related",
-      source: "agent",
-      reason: reason || "Agent identified an environment-related gate failure.",
+      classification: "allowlisted_test_failure",
+      source: "policy",
+      reason: ("Allowlisted cases: " + allowedFailureCases.join(", ")).slice(
+        0,
+        1000,
+      ),
       failedCommands: [...failedCommandSet],
+      allowedFailureCases,
     },
   };
 }
@@ -643,7 +688,6 @@ function runValidationFix(
       "Keep the repair within the original Issue scope.",
       "Run only focused checks needed to verify the repair; the trusted Scheduler reruns complete required gates.",
       "Do not run Integration, E2E, Docker smoke, full Coverage, or a complete test matrix.",
-      "Set validationAssessment.classification to environment_related only when the persistent gate failure is caused by the execution environment rather than repository code. Use uncertain when the evidence is insufficient. An environment_related result may be included in a Draft PR, so never claim the failed gate passed.",
       "Do not commit, push, use provider APIs, or access provider credentials.",
       "Return exactly one JSON object matching this schema:",
       JSON.stringify(ANALYSIS_SCHEMA),
@@ -716,7 +760,6 @@ function runPullRequestValidationFix(
       "Keep the repair within the original Pull Request scope and preserve the previous finding dispositions.",
       "Run only focused checks needed to verify the repair; the trusted Scheduler reruns complete required gates.",
       "Do not run Integration, E2E, Docker smoke, full Coverage, or a complete test matrix.",
-      "Set validationAssessment.classification to environment_related only when the persistent gate failure is caused by the execution environment rather than repository code. Use uncertain when the evidence is insufficient. An environment_related result may be included in the Pull Request, so never claim the failed gate passed.",
       "Do not commit, push, use provider APIs, or access provider credentials.",
       "Return exactly one JSON object matching this schema:",
       JSON.stringify(schema),
@@ -805,12 +848,20 @@ function validateAnalysisWithRepairs(input) {
       const validation = validateAgentWorkspaceWithRetry(
         input.prepared.workspacePath,
       );
+      const validationOverride = validation.allowedFailureCases.length > 0;
       return {
-        analysis,
+        analysis: validationOverride
+          ? withAllowedValidationFailures(
+              analysis,
+              validation.commands,
+              validation.failedCommands,
+              validation.allowedFailureCases,
+            )
+          : analysis,
         commands: validation.commands,
         repairAttempts,
         environmentMismatch: validation.environmentMismatch,
-        environmentOverride: false,
+        validationOverride,
       };
     } catch (validationError) {
       if (repairAttempts >= maxAttempts) {
@@ -827,48 +878,12 @@ function validateAnalysisWithRepairs(input) {
         input.prepared.workspacePath,
       );
       repairAttempts += 1;
-      const previousAnalysis = analysis;
-      const repairedAnalysis = input.repair(
+      analysis = input.repair(
         analysis,
         validationError,
         repairAttempts,
         maxAttempts,
       );
-      const assessment = repairedAnalysis?.validationAssessment;
-      if (assessment?.classification === "environment_related") {
-        const afterAssessment = inspectValidationWorkspace(
-          input.repository,
-          input.targetNumber,
-          input.prepared.workspacePath,
-        );
-        if (afterAssessment.headCommit !== input.expectedHeadSha) {
-          throw new Error(
-            "the Agent committed or moved HEAD during local validation assessment",
-          );
-        }
-        const failedCommands =
-          Array.isArray(validationError?.failedCommands) &&
-          validationError.failedCommands.length > 0
-            ? validationError.failedCommands
-            : requiredValidationCommands();
-        return {
-          analysis: withEnvironmentRelatedValidationOverride(
-            {
-              ...previousAnalysis,
-              ...repairedAnalysis,
-              outcome: input.successOutcome,
-            },
-            requiredValidationCommands(),
-            failedCommands,
-            repairAttempts,
-          ),
-          commands: requiredValidationCommands(),
-          repairAttempts,
-          environmentMismatch: false,
-          environmentOverride: true,
-        };
-      }
-      analysis = repairedAnalysis;
       if (analysis.outcome === input.successOutcome) {
         const afterRepair = inspectValidationWorkspace(
           input.repository,
@@ -895,7 +910,7 @@ function validateAnalysisWithRepairs(input) {
     commands: [],
     repairAttempts,
     environmentMismatch: false,
-    environmentOverride: false,
+    validationOverride: false,
   };
 }
 
@@ -1103,7 +1118,7 @@ function runReviewFix(repository, pullRequestNumber, reviewId) {
       );
     }
     analysis = validation.analysis;
-    if (analysis.outcome === "fixed" && !validation.environmentOverride) {
+    if (analysis.outcome === "fixed" && !validation.validationOverride) {
       analysis = withRequiredValidationResults(
         analysis,
         validation.commands,
@@ -1234,7 +1249,7 @@ function runCiFix(repository, pullRequestNumber, headSha, checkSuiteId) {
       return recordCiFailure(repository, pullRequestNumber, prepared, error);
     }
     analysis = validation.analysis;
-    if (analysis.outcome === "fixed" && !validation.environmentOverride) {
+    if (analysis.outcome === "fixed" && !validation.validationOverride) {
       analysis = withRequiredValidationResults(
         analysis,
         validation.commands,
@@ -1400,7 +1415,7 @@ function handleGitHubIssue(event) {
       return recordFailure(repository, issueNumber, error);
     }
     analysis = validation.analysis;
-    if (analysis.outcome === "implemented" && !validation.environmentOverride) {
+    if (analysis.outcome === "implemented" && !validation.validationOverride) {
       analysis = withRequiredValidationResults(
         analysis,
         validation.commands,

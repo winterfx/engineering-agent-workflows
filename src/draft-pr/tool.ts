@@ -21,7 +21,7 @@ import {
 } from "./repository.js";
 import {
   draftPrSubmissionSchema,
-  hasConsistentEnvironmentValidationOverride,
+  hasConsistentValidationOverride,
   type DraftPrAnalysis,
   type DraftPrInspection,
 } from "./schema.js";
@@ -568,7 +568,7 @@ function validateImplementedAnalysis(
   }
   if (
     analysis.validationOverride &&
-    !hasConsistentEnvironmentValidationOverride(analysis)
+    !hasConsistentValidationOverride(analysis)
   ) {
     throw new Error(
       "implemented result has an inconsistent validation override",
@@ -576,7 +576,7 @@ function validateImplementedAnalysis(
   }
   if (
     analysis.tests.some((test) => test.status === "failed") &&
-    !hasConsistentEnvironmentValidationOverride(analysis)
+    !hasConsistentValidationOverride(analysis)
   ) {
     throw new Error("implemented result reports a failed validation command");
   }
