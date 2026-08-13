@@ -4,8 +4,7 @@ const GITHUB_WORKFLOW_RUN_TOPIC = "webhook.github.workflow_run";
 const READY_LABEL = "agent:ready";
 const APPROVED_LABEL = "agent:approved";
 const WORKFLOW_POLICY_JSON = "__WORKFLOW_POLICY_JSON__";
-const WORKFLOW_TOOL_PATH =
-  "$WORKSPACE/workflow-repo/agents/draft-pr/tool/main.mjs";
+const WORKFLOW_TOOL_PATH = "__WORKFLOW_TOOL_PATH__";
 const WORKSPACE_VOLUME = {
   type: "bind",
   source: "./.draft-pr-workspaces",

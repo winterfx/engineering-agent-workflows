@@ -10,8 +10,7 @@ const GITHUB_ISSUE_ACTIONS = [
 const GITHUB_COMMENT_ACTIONS = ["created", "edited", "deleted"];
 const GITHUB_TRIAGE_CONTROL_LABEL = "skip-triage";
 const WORKFLOW_POLICY_JSON = "__WORKFLOW_POLICY_JSON__";
-const WORKFLOW_TOOL_PATH =
-  "$WORKSPACE/workflow-repo/agents/issue-triage/tool/main.mjs";
+const WORKFLOW_TOOL_PATH = "__WORKFLOW_TOOL_PATH__";
 
 const ANALYSIS_SCHEMA = {
   type: "object",

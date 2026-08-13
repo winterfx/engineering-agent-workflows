@@ -5,8 +5,7 @@ const GITHUB_WORKFLOW_RUN_TOPIC = "webhook.github.workflow_run";
 const READY_LABEL = "agent:ready";
 const APPROVED_LABEL = "agent:approved";
 const WORKFLOW_POLICY_JSON = "{\"version\":1,\"readyLabel\":\"agent:ready\",\"approvedLabel\":\"agent:approved\",\"runningLabel\":\"agent:running\",\"needsApprovalLabel\":\"agent:needs-approval\",\"prOpenLabel\":\"agent:pr-open\",\"failedLabel\":\"agent:failed\",\"skipLabels\":[\"skip-triage\"],\"blockedLabels\":[\"duplicate\",\"agent:pr-open\",\"agent:running\"],\"branchPrefix\":\"codex/issue-\",\"maxChangedFiles\":40,\"maxChangedLines\":1500,\"maxReviewComments\":50,\"maxValidationFixIterations\":2,\"maxFixIterations\":3,\"requiredValidationGates\":[\"task-prepare\",\"task-lint\",\"task-test-unit\"],\"allowedValidationFailureCases\":[\"TestConfigStoreCRUDCoverageWorkflows\",\"TestIntegrationConfigStoreCRUDCoverageWorkflows\",\"TestE2EConfigStoreCRUDCoverageWorkflows\",\"runtime command execution > injects runtime path environment into user commands\"],\"approvalPathPrefixes\":[\".github/workflows/\",\"migrations/\",\"db/migrations/\",\"database/migrations/\",\"pkg/auth/\",\"src/auth/\",\"security/\",\"deploy/\",\"release/\"],\"labelColors\":{\"agent:ready\":\"1d76db\",\"agent:approved\":\"0e8a16\",\"agent:running\":\"fbca04\",\"agent:needs-approval\":\"d93f0b\",\"agent:pr-open\":\"5319e7\",\"agent:failed\":\"b60205\"}}";
-const WORKFLOW_TOOL_PATH =
-  "$WORKSPACE/workflow-repo/agents/draft-pr/tool/main.mjs";
+const WORKFLOW_TOOL_PATH = "$WORKSPACE/workflow-repo/agents/draft-pr/tool/main.mjs";
 const WORKSPACE_VOLUME = {
   type: "bind",
   source: "./.draft-pr-workspaces",

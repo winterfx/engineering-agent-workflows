@@ -11,8 +11,7 @@ const GITHUB_ISSUE_ACTIONS = [
 const GITHUB_COMMENT_ACTIONS = ["created", "edited", "deleted"];
 const GITHUB_TRIAGE_CONTROL_LABEL = "skip-triage";
 const WORKFLOW_POLICY_JSON = "{\"version\":1,\"duplicateConfidenceThreshold\":0.92,\"classificationConfidenceThreshold\":0.75,\"priorityConfidenceThreshold\":0.8,\"maxCandidates\":20,\"maxRelatedIssues\":5,\"skipLabels\":[\"skip-triage\"],\"managedLabelPrefixes\":[\"priority:\",\"triage:\"],\"classificationLabels\":{\"bug\":\"bug\",\"enhancement\":\"enhancement\",\"documentation\":\"documentation\",\"question\":\"question\"},\"labelColors\":{\"bug\":\"d73a4a\",\"documentation\":\"0075ca\",\"enhancement\":\"a2eeef\",\"question\":\"d876e3\",\"priority:P0\":\"b60205\",\"priority:P1\":\"d93f0b\",\"priority:P2\":\"fbca04\",\"priority:P3\":\"0e8a16\",\"priority:pending\":\"c5def5\",\"triage:done\":\"0e8a16\",\"triage:needs-info\":\"fbca04\",\"duplicate\":\"cfd3d7\"},\"labelDescriptions\":{\"bug\":\"Something isn't working\",\"documentation\":\"Improvements or additions to documentation\",\"enhancement\":\"New feature or request\",\"question\":\"Further information is requested\",\"priority:P0\":\"Automated triage: critical and immediate impact\",\"priority:P1\":\"Automated triage: high-priority impact\",\"priority:P2\":\"Automated triage: significant impact\",\"priority:P3\":\"Automated triage: supported low-impact work\",\"priority:pending\":\"Automated triage: priority needs more evidence\",\"triage:done\":\"Automated initial triage completed\",\"triage:needs-info\":\"Automated triage needs reporter information\",\"duplicate\":\"This issue or pull request already exists\"}}";
-const WORKFLOW_TOOL_PATH =
-  "$WORKSPACE/workflow-repo/agents/issue-triage/tool/main.mjs";
+const WORKFLOW_TOOL_PATH = "$WORKSPACE/workflow-repo/agents/issue-triage/tool/main.mjs";
 
 const ANALYSIS_SCHEMA = {
   type: "object",
