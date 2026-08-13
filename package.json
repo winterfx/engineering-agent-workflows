@@ -7,6 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks",
     "build": "tsx scripts/build-tools.ts",
     "build:issue-triage": "tsx scripts/build-tools.ts issue-triage",
     "build:draft-pr": "tsx scripts/build-tools.ts draft-pr",

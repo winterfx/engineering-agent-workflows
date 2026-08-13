@@ -9,22 +9,8 @@ const GITHUB_ISSUE_ACTIONS = [
 ];
 const GITHUB_COMMENT_ACTIONS = ["created", "edited", "deleted"];
 const GITHUB_TRIAGE_CONTROL_LABEL = "skip-triage";
-const WORKFLOW_TOOL_BASE64 = "__WORKFLOW_TOOL_BASE64__";
 const WORKFLOW_POLICY_JSON = "__WORKFLOW_POLICY_JSON__";
-const WORKFLOW_TOOL_CHUNK_SIZE = 60000;
-
-function workflowToolEnvironment() {
-  const env = {};
-  for (
-    let offset = 0, index = 0;
-    offset < WORKFLOW_TOOL_BASE64.length;
-    offset += WORKFLOW_TOOL_CHUNK_SIZE, index += 1
-  ) {
-    env[`WORKFLOW_TOOL_CHUNK_${String(index).padStart(4, "0")}`] =
-      WORKFLOW_TOOL_BASE64.slice(offset, offset + WORKFLOW_TOOL_CHUNK_SIZE);
-  }
-  return env;
-}
+const WORKFLOW_TOOL_PATH = "__WORKFLOW_TOOL_PATH__";
 
 const ANALYSIS_SCHEMA = {
   type: "object",
@@ -118,9 +104,7 @@ function runTool(command, repository, issueNumber, submission, senderLogin) {
   const result = scheduler.shell(
     [
       "set -eu",
-      'workflow_tool_dir="$(mktemp -d)"',
-      'workflow_tool="$workflow_tool_dir/issue-triage.mjs"',
-      'node -e \'const fs=require("node:fs"); const source=Object.keys(process.env).filter((key)=>key.startsWith("WORKFLOW_TOOL_CHUNK_")).sort().map((key)=>process.env[key]).join(""); fs.writeFileSync(process.argv[1], Buffer.from(source, "base64"))\' "$workflow_tool"',
+      `workflow_tool="${WORKFLOW_TOOL_PATH}"`,
       'sender_login=$(printf "%s" "$TRIAGE_SENDER_LOGIN" | tr "[:upper:]" "[:lower:]")',
       'bot_login=$(printf "%s" "${GITHUB_BOT_LOGIN:-}" | tr "[:upper:]" "[:lower:]")',
       'allowed_repository="${GITHUB_ALLOWED_REPOSITORY:-}"',
@@ -146,7 +130,6 @@ function runTool(command, repository, issueNumber, submission, senderLogin) {
         TRIAGE_REPOSITORY: repository,
         TRIAGE_ISSUE: String(issueNumber),
         WORKFLOW_POLICY_JSON,
-        ...workflowToolEnvironment(),
         TRIAGE_SUBMISSION: submission ? JSON.stringify(submission) : "",
         TRIAGE_SENDER_LOGIN: senderLogin || "",
       },

@@ -7,7 +7,6 @@ describe("GitHub Issue triage scheduler script", () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     let shellScript = "";
     let senderLogin = "";
-    let toolChunks: string[] = [];
     let workflowPolicyJson = "";
     const context = vm.createContext({
       scheduler: {
@@ -22,10 +21,6 @@ describe("GitHub Issue triage scheduler script", () => {
           shellScript = script;
           senderLogin = options.env.TRIAGE_SENDER_LOGIN ?? "";
           workflowPolicyJson = options.env.WORKFLOW_POLICY_JSON ?? "";
-          toolChunks = Object.entries(options.env)
-            .filter(([name]) => name.startsWith("WORKFLOW_TOOL_CHUNK_"))
-            .sort(([left], [right]) => left.localeCompare(right))
-            .map(([, value]) => value);
           return {
             success: true,
             stdout: JSON.stringify({
@@ -61,9 +56,9 @@ describe("GitHub Issue triage scheduler script", () => {
     });
     expect(senderLogin).toBe("triage-bot");
     expect(shellScript).toContain("GITHUB_BOT_LOGIN");
-    expect(shellScript).toContain('Buffer.from(source, "base64")');
-    expect(toolChunks.length).toBeGreaterThan(1);
-    expect(toolChunks.every((chunk) => chunk.length <= 60000)).toBe(true);
+    expect(shellScript).toContain(
+      "$WORKSPACE/workflow-repo/agents/issue-triage/tool/main.mjs",
+    );
     expect(JSON.parse(workflowPolicyJson)).toEqual(
       expect.objectContaining({ version: 1 }),
     );

@@ -3,28 +3,14 @@ const GITHUB_REVIEW_TOPIC = "webhook.github.pull_request_review";
 const GITHUB_WORKFLOW_RUN_TOPIC = "webhook.github.workflow_run";
 const READY_LABEL = "agent:ready";
 const APPROVED_LABEL = "agent:approved";
-const WORKFLOW_TOOL_BASE64 = "__WORKFLOW_TOOL_BASE64__";
 const WORKFLOW_POLICY_JSON = "__WORKFLOW_POLICY_JSON__";
-const WORKFLOW_TOOL_CHUNK_SIZE = 60000;
+const WORKFLOW_TOOL_PATH = "__WORKFLOW_TOOL_PATH__";
 const WORKSPACE_VOLUME = {
   type: "bind",
   source: "./.draft-pr-workspaces",
   target: "/draft-pr-workspaces",
   readOnly: false,
 };
-
-function workflowToolEnvironment() {
-  const env = {};
-  for (
-    let offset = 0, index = 0;
-    offset < WORKFLOW_TOOL_BASE64.length;
-    offset += WORKFLOW_TOOL_CHUNK_SIZE, index += 1
-  ) {
-    env[`WORKFLOW_TOOL_CHUNK_${String(index).padStart(4, "0")}`] =
-      WORKFLOW_TOOL_BASE64.slice(offset, offset + WORKFLOW_TOOL_CHUNK_SIZE);
-  }
-  return env;
-}
 
 function agentWorkspaceVolume(workspacePath) {
   const prefix = "/draft-pr-workspaces/repositories/";
@@ -302,17 +288,12 @@ function validateAgentWorkspaceWithRetry(workspacePath) {
 
 function runDeterministicTool(script, env, label) {
   const result = scheduler.shell(
-    [
-      "set -eu",
-      'workflow_tool_dir="$(mktemp -d)"',
-      'workflow_tool="$workflow_tool_dir/draft-pr.mjs"',
-      'node -e \'const fs=require("node:fs"); const source=Object.keys(process.env).filter((key)=>key.startsWith("WORKFLOW_TOOL_CHUNK_")).sort().map((key)=>process.env[key]).join(""); fs.writeFileSync(process.argv[1], Buffer.from(source, "base64"))\' "$workflow_tool"',
-      'export DRAFT_PR_TOOL="$workflow_tool"',
-      script,
-    ].join("\n"),
+    ["set -eu", `export DRAFT_PR_TOOL="${WORKFLOW_TOOL_PATH}"`, script].join(
+      "\n",
+    ),
     {
       sandboxPolicy: "new",
-      env: { ...env, WORKFLOW_POLICY_JSON, ...workflowToolEnvironment() },
+      env: { ...env, WORKFLOW_POLICY_JSON },
       volumes: [WORKSPACE_VOLUME],
       maxOutputBytes: 4 * 1024 * 1024,
     },

@@ -7,7 +7,6 @@ describe("Draft PR Scheduler script", () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     const commands: string[] = [];
     let agentOptions: Record<string, unknown> = {};
-    let toolChunks: string[] = [];
     let workflowPolicyJson = "";
     const shellCalls: Array<{
       script: string;
@@ -32,10 +31,6 @@ describe("Draft PR Scheduler script", () => {
           shellCalls.push({ script, options });
           commands.push(schedulerCommand(options.env));
           workflowPolicyJson = options.env.WORKFLOW_POLICY_JSON ?? "";
-          toolChunks = Object.entries(options.env)
-            .filter(([name]) => name.startsWith("WORKFLOW_TOOL_CHUNK_"))
-            .sort(([left], [right]) => left.localeCompare(right))
-            .map(([, value]) => value);
           const result =
             options.env.DRAFT_PR_COMMAND === "prepare"
               ? {
@@ -178,8 +173,12 @@ describe("Draft PR Scheduler script", () => {
       }),
     );
     expect(workspaceValidation?.options.volumes).toEqual(agentOptions.volumes);
-    expect(toolChunks.length).toBeGreaterThan(1);
-    expect(toolChunks.every((chunk) => chunk.length <= 60000)).toBe(true);
+    const toolInvocation = shellCalls.find(
+      ({ options }) => options.env.DRAFT_PR_COMMAND === "prepare",
+    );
+    expect(toolInvocation?.script).toContain(
+      'export DRAFT_PR_TOOL="$WORKSPACE/workflow-repo/agents/draft-pr/tool/main.mjs"',
+    );
     expect(JSON.parse(workflowPolicyJson)).toEqual(
       expect.objectContaining({
         version: 1,

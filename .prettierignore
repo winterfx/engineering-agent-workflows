@@ -1,2 +1,3 @@
 dist/
 agents/*/scheduler.js
+agents/*/tool/main.mjs
