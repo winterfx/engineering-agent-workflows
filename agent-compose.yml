@@ -39,7 +39,7 @@ agents:
     workspace:
       provider: git
       url: https://github.com/winterfx/engineering-agent-workflows.git
-      ref: 78db6672cbd38e07d10621f937d55f22c1fcfbab
+      ref: main
       target: workflow-repo
 
     scheduler:
@@ -89,7 +89,7 @@ agents:
     workspace:
       provider: git
       url: https://github.com/winterfx/engineering-agent-workflows.git
-      ref: 78db6672cbd38e07d10621f937d55f22c1fcfbab
+      ref: main
       target: workflow-repo
 
     scheduler:
