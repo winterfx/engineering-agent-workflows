@@ -13,6 +13,7 @@
     "build:check": "tsx scripts/build-tools.ts --check",
     "check": "npm run format:check && npm run typecheck && npm test && npm run build:check",
     "format": "prettier --write .",
+    "pin-workspace-ref": "tsx scripts/pin-workspace-ref.ts",
     "format:check": "prettier --check .",
     "start": "tsx src/issue-triage/main.ts",
     "start:draft-pr": "tsx src/draft-pr/main.ts",

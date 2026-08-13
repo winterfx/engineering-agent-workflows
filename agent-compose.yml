@@ -36,6 +36,12 @@ agents:
         ref: main
         path: agents/issue-triage
 
+    workspace:
+      provider: git
+      url: https://github.com/winterfx/engineering-agent-workflows.git
+      ref: 78db6672cbd38e07d10621f937d55f22c1fcfbab
+      target: workflow-repo
+
     scheduler:
       enabled: true
       sandbox_policy: new
@@ -79,6 +85,12 @@ agents:
         url: https://github.com/winterfx/engineering-agent-workflows.git
         ref: main
         path: agents/draft-pr
+
+    workspace:
+      provider: git
+      url: https://github.com/winterfx/engineering-agent-workflows.git
+      ref: 78db6672cbd38e07d10621f937d55f22c1fcfbab
+      target: workflow-repo
 
     scheduler:
       enabled: true
