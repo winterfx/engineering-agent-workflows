@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Installed via `core.hooksPath` (see package.json "prepare" script).
+# Rebuilds and re-stages the committed agents/*/tool/main.mjs and
+# agents/*/scheduler.js bundles whenever staged src/ changes would make
+# them stale, so `npm run build` never has to be run by hand.
+set -euo pipefail
+
+if git diff --cached --name-only --diff-filter=ACM | grep -q '^src/'; then
+  npm run build --silent
+  git add \
+    agents/issue-triage/tool/main.mjs \
+    agents/draft-pr/tool/main.mjs \
+    agents/issue-triage/scheduler.js \
+    agents/draft-pr/scheduler.js
+fi
