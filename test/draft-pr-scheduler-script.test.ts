@@ -1068,6 +1068,147 @@ describe("Draft PR Scheduler script", () => {
     expect(result).toEqual({ ok: true, applied: true, outcome: "fixed" });
   });
 
+  it("routes an allowlisted bot's COMMENTED Review into a review-fix batch", async () => {
+    const handlers = new Map<string, (event: unknown) => unknown>();
+    const commands: string[] = [];
+    const context = vm.createContext({
+      scheduler: {
+        on(
+          topic: string,
+          _triggerID: string,
+          handler: (event: unknown) => unknown,
+        ) {
+          handlers.set(topic, handler);
+        },
+        interval() {},
+        shell(_script: string, options: { env: Record<string, string> }) {
+          commands.push(schedulerCommand(options.env));
+          const result =
+            options.env.DRAFT_PR_COMMAND === "prepare-review"
+              ? {
+                  ok: true,
+                  repository: "chaitin/agent-compose",
+                  pullRequestNumber: 630,
+                  workspacePath:
+                    "/draft-pr-workspaces/repositories/0123456789abcdef/pr-630",
+                  branch: "codex/issue-629",
+                  baseBranch: "main",
+                  expectedHeadSha: "a".repeat(40),
+                  reviewId: 5005431358,
+                  reviewFingerprint: "b".repeat(20),
+                  previousReviewCursor: 0,
+                  previousIterations: 0,
+                  findings: [
+                    {
+                      source: "review_comment",
+                      commentId: 3841424677,
+                      path: "pkg/agentcompose/api/project_handler.go",
+                      line: 126,
+                      body: "schedulerRuns silently degrades to nil.",
+                    },
+                  ],
+                }
+              : { ok: true, applied: true, outcome: "fixed" };
+          return { success: true, stdout: JSON.stringify(result) };
+        },
+        agent() {
+          return {
+            success: true,
+            finalText: JSON.stringify({
+              outcome: "fixed",
+              commitTitle: "fix(api): restore scheduler run delegation",
+              summary: ["Address the monkeyscan finding."],
+              findings: [
+                {
+                  source: "review_comment",
+                  commentId: 3841424677,
+                  disposition: "fixed",
+                  reason: "Covered by tests.",
+                },
+              ],
+              tests: [],
+              risk: { level: "low", reasons: [] },
+              notes: [],
+            }),
+          };
+        },
+      },
+    });
+    new vm.Script(await schedulerScript()).runInContext(context);
+
+    const result = handlers.get("webhook.github.pull_request_review")?.({
+      payload: {
+        body: {
+          action: "submitted",
+          pull_request: { number: 630 },
+          review: {
+            id: 5005431358,
+            state: "commented",
+            user: { login: "monkeyscan[bot]" },
+          },
+          repository: { full_name: "chaitin/agent-compose" },
+        },
+      },
+    });
+
+    expect(commands).toEqual([
+      "prepare-review",
+      "prepare-workspace",
+      "validate-workspace",
+      "apply-review",
+    ]);
+    expect(result).toEqual({ ok: true, applied: true, outcome: "fixed" });
+  });
+
+  it("ignores a COMMENTED Review from a non-allowlisted bot", async () => {
+    const handlers = new Map<string, (event: unknown) => unknown>();
+    const commands: string[] = [];
+    const context = vm.createContext({
+      scheduler: {
+        on(
+          topic: string,
+          _triggerID: string,
+          handler: (event: unknown) => unknown,
+        ) {
+          handlers.set(topic, handler);
+        },
+        interval() {},
+        shell(_script: string, options: { env: Record<string, string> }) {
+          commands.push(schedulerCommand(options.env));
+          return { success: true, stdout: JSON.stringify({ ok: true }) };
+        },
+        agent() {
+          throw new Error("not used");
+        },
+      },
+    });
+    new vm.Script(await schedulerScript()).runInContext(context);
+
+    const result = handlers.get("webhook.github.pull_request_review")?.({
+      payload: {
+        body: {
+          action: "submitted",
+          pull_request: { number: 630 },
+          review: {
+            id: 900,
+            state: "commented",
+            user: { login: "some-other-bot[bot]" },
+          },
+          repository: { full_name: "chaitin/agent-compose" },
+        },
+      },
+    });
+
+    expect(commands).toEqual([]);
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        ignored: true,
+        reason: "Review is not a change request",
+      }),
+    );
+  });
+
   it("repairs a failed Review gate before apply and preserves dispositions", async () => {
     const handlers = new Map<string, (event: unknown) => unknown>();
     const commands: string[] = [];

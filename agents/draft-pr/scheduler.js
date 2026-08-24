@@ -1443,11 +1443,29 @@ function handleRequestedChangesReview(event) {
       reason: "review has no Pull Request",
     };
   }
-  if (
-    String(body.review?.state || "")
-      .trim()
-      .toLowerCase() !== "changes_requested"
-  ) {
+  const reviewState = String(body.review?.state || "")
+    .trim()
+    .toLowerCase();
+  const reviewerLogin = String(body.review?.user?.login || "")
+    .trim()
+    .toLowerCase();
+  const trustedReviewBotLogins = Array.isArray(
+    workflowPolicy()?.trustedReviewBotLogins,
+  )
+    ? workflowPolicy().trustedReviewBotLogins.map((login) =>
+        String(login).trim().toLowerCase(),
+      )
+    : [];
+  // Review bots (e.g. monkeyscan[bot]) can only submit GitHub App reviews as
+  // COMMENTED, never CHANGES_REQUESTED — see review-tool.ts's matching
+  // isTrustedReviewBot() exemption, which enforces the rest of the trust
+  // checks once this coarse webhook-level filter lets the event through.
+  const isTrustedReviewBot =
+    reviewerLogin !== "" && trustedReviewBotLogins.includes(reviewerLogin);
+  const acceptableReviewState = isTrustedReviewBot
+    ? reviewState === "changes_requested" || reviewState === "commented"
+    : reviewState === "changes_requested";
+  if (!acceptableReviewState) {
     return {
       ok: true,
       ignored: true,
