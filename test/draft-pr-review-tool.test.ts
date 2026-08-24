@@ -47,6 +47,7 @@ const policy: DraftPrPolicy = {
   requiredValidationGates: ["task-prepare", "task-lint", "task-test-unit"],
   allowedValidationFailureCases: [],
   approvalPathPrefixes: [".github/workflows/"],
+  trustedReviewBotLogins: ["monkeyscan[bot]"],
   labelColors: {},
 };
 
@@ -339,6 +340,61 @@ describe("Draft PR requested-changes review fix", () => {
     );
     expect(workspace.preparedReviewCalls).toBe(0);
     expect(provider.comments.at(-1)?.body).toContain("status=needs-approval");
+  });
+
+  it("accepts a COMMENTED Review from an allowlisted bot login", async () => {
+    const provider = new FakeProvider();
+    provider.review.state = "COMMENTED";
+    provider.review.body = "";
+    provider.review.authorAssociation = "NONE";
+    provider.review.user = { login: "monkeyscan[bot]", id: 900, type: "Bot" };
+    provider.reviewComments = [
+      {
+        ...reviewComment(
+          10,
+          "schedulerRuns silently degrades to nil.",
+          "pkg/agentcompose/api/project_handler.go",
+          126,
+        ),
+        user: { login: "monkeyscan[bot]", id: 900 },
+      },
+    ];
+
+    const prepared = await prepareReviewFix(
+      repository,
+      pullRequestNumber,
+      reviewId,
+      dependencies(provider, new FakeWorkspace()),
+    );
+
+    expect(prepared.findings).toEqual([
+      expect.objectContaining({
+        source: "review_comment",
+        commentId: 10,
+        body: "schedulerRuns silently degrades to nil.",
+      }),
+    ]);
+  });
+
+  it("still rejects a COMMENTED Review from a non-allowlisted bot login", async () => {
+    const provider = new FakeProvider();
+    provider.review.state = "COMMENTED";
+    provider.review.authorAssociation = "NONE";
+    provider.review.user = { login: "some-other-bot[bot]", id: 901, type: "Bot" };
+
+    const prepared = await prepareReviewFix(
+      repository,
+      pullRequestNumber,
+      reviewId,
+      dependencies(provider, new FakeWorkspace()),
+    );
+
+    expect(prepared).toEqual(
+      expect.objectContaining({
+        skipped: true,
+        reason: expect.stringContaining("not a change request"),
+      }),
+    );
   });
 
   it.each([

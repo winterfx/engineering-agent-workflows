@@ -5576,6 +5576,7 @@ var draftPrPolicySchema = object({
   ).min(1),
   allowedValidationFailureCases: array(string2().min(1).max(300)).max(50),
   approvalPathPrefixes: array(string2().min(1)),
+  trustedReviewBotLogins: array(string2().min(1)),
   labelColors: record(string2(), string2().regex(/^[0-9a-fA-F]{6}$/))
 });
 function requiresApproval(analysis, inspection, approved, policy) {
@@ -5611,6 +5612,13 @@ function hasLabel(labels, expected) {
 }
 function hasAnyLabel(labels, expected) {
   return expected.some((label) => hasLabel(labels, label));
+}
+function isTrustedReviewBot(login, policy) {
+  const normalized = login.trim().toLowerCase();
+  if (!normalized) return false;
+  return policy.trustedReviewBotLogins.some(
+    (value) => value.trim().toLowerCase() === normalized
+  );
 }
 
 // src/draft-pr/repository.ts
@@ -6651,7 +6659,11 @@ async function prepareReviewFix(repository, pullRequestNumber, reviewId, depende
   ]);
   const reason = ineligibleReason2(pullRequest, repository, dependencies);
   if (reason) return skipped2(repository, pullRequestNumber, reason);
-  const reviewReason = ineligibleReviewReason(review, pullRequest);
+  const reviewReason = ineligibleReviewReason(
+    review,
+    pullRequest,
+    dependencies.policy
+  );
   if (reviewReason) return skipped2(repository, pullRequestNumber, reviewReason);
   const state = reviewState(conversationComments, dependencies);
   if (review.id <= state.reviewCursor) {
@@ -6772,7 +6784,11 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
   ]);
   const reason = ineligibleReason2(pullRequest, repository, dependencies);
   if (reason) throw new Error(reason);
-  const reviewReason = ineligibleReviewReason(review, pullRequest);
+  const reviewReason = ineligibleReviewReason(
+    review,
+    pullRequest,
+    dependencies.policy
+  );
   if (reviewReason) throw new Error(reviewReason);
   if (pullRequest.headSha !== submission.expectedHeadSha) {
     throw new Error("Pull Request head changed after review fix preparation");
@@ -6963,13 +6979,21 @@ function ineligibleReason2(pullRequest, repository, dependencies) {
   }
   return void 0;
 }
-function ineligibleReviewReason(review, pullRequest) {
-  if (review.state.trim().toLowerCase() !== "changes_requested") {
-    return "Pull Request Review is not a change request";
-  }
+function ineligibleReviewReason(review, pullRequest, policy) {
   if (!review.user?.login.trim()) return "Pull Request Review has no author";
-  if (!trustedReviewerAssociation(review.authorAssociation)) {
-    return "Pull Request Review author is not a trusted repository member";
+  const trustedBot = isTrustedReviewBot(review.user.login, policy);
+  const state = review.state.trim().toLowerCase();
+  if (trustedBot) {
+    if (state !== "changes_requested" && state !== "commented") {
+      return "Pull Request Review is not a change request or comment";
+    }
+  } else {
+    if (state !== "changes_requested") {
+      return "Pull Request Review is not a change request";
+    }
+    if (!trustedReviewerAssociation(review.authorAssociation)) {
+      return "Pull Request Review author is not a trusted repository member";
+    }
   }
   if (review.commitId !== pullRequest.headSha) {
     return "Pull Request Review targets a stale head";

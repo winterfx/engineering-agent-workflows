@@ -30,6 +30,7 @@ export const draftPrPolicySchema = object({
   ).min(1),
   allowedValidationFailureCases: array(string().min(1).max(300)).max(50),
   approvalPathPrefixes: array(string().min(1)),
+  trustedReviewBotLogins: array(string().min(1)),
   labelColors: record(string(), string().regex(/^[0-9a-fA-F]{6}$/)),
 });
 
@@ -76,4 +77,15 @@ export function hasLabel(labels: string[], expected: string): boolean {
 
 export function hasAnyLabel(labels: string[], expected: string[]): boolean {
   return expected.some((label) => hasLabel(labels, label));
+}
+
+export function isTrustedReviewBot(
+  login: string,
+  policy: Pick<DraftPrPolicy, "trustedReviewBotLogins">,
+): boolean {
+  const normalized = login.trim().toLowerCase();
+  if (!normalized) return false;
+  return policy.trustedReviewBotLogins.some(
+    (value) => value.trim().toLowerCase() === normalized,
+  );
 }

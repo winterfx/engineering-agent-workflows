@@ -9,7 +9,11 @@ import {
   type ReviewFixState,
   type ReviewFixStatus,
 } from "./review-comment.js";
-import { requiresApproval } from "./policy.js";
+import {
+  isTrustedReviewBot,
+  requiresApproval,
+  type DraftPrPolicy,
+} from "./policy.js";
 import type {
   DraftPullRequest,
   PullRequestReview,
@@ -118,7 +122,11 @@ export async function prepareReviewFix(
     ]);
   const reason = ineligibleReason(pullRequest, repository, dependencies);
   if (reason) return skipped(repository, pullRequestNumber, reason);
-  const reviewReason = ineligibleReviewReason(review, pullRequest);
+  const reviewReason = ineligibleReviewReason(
+    review,
+    pullRequest,
+    dependencies.policy,
+  );
   if (reviewReason) return skipped(repository, pullRequestNumber, reviewReason);
 
   const state = reviewState(conversationComments, dependencies);
@@ -249,7 +257,11 @@ export async function applyReviewFix(
     ]);
   const reason = ineligibleReason(pullRequest, repository, dependencies);
   if (reason) throw new Error(reason);
-  const reviewReason = ineligibleReviewReason(review, pullRequest);
+  const reviewReason = ineligibleReviewReason(
+    review,
+    pullRequest,
+    dependencies.policy,
+  );
   if (reviewReason) throw new Error(reviewReason);
   if (pullRequest.headSha !== submission.expectedHeadSha) {
     throw new Error("Pull Request head changed after review fix preparation");
@@ -486,13 +498,27 @@ function ineligibleReason(
 function ineligibleReviewReason(
   review: PullRequestReview,
   pullRequest: DraftPullRequest,
+  policy: DraftPrPolicy,
 ): string | undefined {
-  if (review.state.trim().toLowerCase() !== "changes_requested") {
-    return "Pull Request Review is not a change request";
-  }
   if (!review.user?.login.trim()) return "Pull Request Review has no author";
-  if (!trustedReviewerAssociation(review.authorAssociation)) {
-    return "Pull Request Review author is not a trusted repository member";
+  const trustedBot = isTrustedReviewBot(review.user.login, policy);
+  const state = review.state.trim().toLowerCase();
+  // Review bots (e.g. monkeyscan[bot]) submit findings as GitHub App reviews,
+  // which GitHub only lets them post as COMMENTED — they can never use the
+  // CHANGES_REQUESTED state a human reviewer would, and they are never a
+  // repository collaborator either. Trusted bots get a state exemption in
+  // return for tighter identity pinning (exact allowlisted login match).
+  if (trustedBot) {
+    if (state !== "changes_requested" && state !== "commented") {
+      return "Pull Request Review is not a change request or comment";
+    }
+  } else {
+    if (state !== "changes_requested") {
+      return "Pull Request Review is not a change request";
+    }
+    if (!trustedReviewerAssociation(review.authorAssociation)) {
+      return "Pull Request Review author is not a trusted repository member";
+    }
   }
   if (review.commitId !== pullRequest.headSha) {
     return "Pull Request Review targets a stale head";

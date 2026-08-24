@@ -32,6 +32,7 @@
     "deploy/",
     "release/"
   ],
+  "trustedReviewBotLogins": ["monkeyscan[bot]"],
   "labelColors": {
     "agent:ready": "1d76db",
     "agent:approved": "0e8a16",
