@@ -465,6 +465,79 @@ describe("GitHubClient", () => {
     );
   });
 
+  it("resolves only the review threads containing an addressed comment", async () => {
+    const requests: RecordedRequest[] = [];
+    const client = new GitHubClient({
+      baseUrl: "https://github.test/api",
+      fetch: recordingFetch(requests, (request) => {
+        const query = (request.body?.query as string | undefined) ?? "";
+        if (query.includes("resolveReviewThread")) {
+          return jsonResponse({
+            data: {
+              resolveReviewThread: {
+                thread: { id: "thread-addressed", isResolved: true },
+              },
+            },
+          });
+        }
+        return jsonResponse({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [
+                    {
+                      id: "thread-addressed",
+                      isResolved: false,
+                      comments: { nodes: [{ databaseId: 10 }] },
+                    },
+                    {
+                      id: "thread-unrelated",
+                      isResolved: false,
+                      comments: { nodes: [{ databaseId: 999 }] },
+                    },
+                    {
+                      id: "thread-already-resolved",
+                      isResolved: true,
+                      comments: { nodes: [{ databaseId: 11 }] },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        });
+      }),
+    });
+
+    await client.resolveReviewThreads("chaitin/agent-compose", 440, [10, 11]);
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toMatchObject({
+      url: "https://github.test/api/graphql",
+      method: "POST",
+      body: {
+        variables: { owner: "chaitin", name: "agent-compose", number: 440 },
+      },
+    });
+    expect(requests[1]?.body).toMatchObject({
+      variables: { threadId: "thread-addressed" },
+    });
+  });
+
+  it("skips the GraphQL request entirely when there are no comment ids", async () => {
+    const requests: RecordedRequest[] = [];
+    const client = new GitHubClient({
+      baseUrl: "https://github.test/api",
+      fetch: recordingFetch(requests, () => jsonResponse({ data: {} })),
+    });
+
+    await client.resolveReviewThreads("chaitin/agent-compose", 440, []);
+
+    expect(requests).toHaveLength(0);
+  });
+
   it("lists failed check runs and annotations for a trusted commit SHA", async () => {
     const requests: RecordedRequest[] = [];
     const headSha = "a".repeat(40);

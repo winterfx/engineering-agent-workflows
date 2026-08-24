@@ -324,6 +324,34 @@ var GitHubClient = class {
     );
     return normalizePullRequestReview(review);
   }
+  async resolveReviewThreads(repository, pullRequestNumber, reviewCommentIds) {
+    if (reviewCommentIds.length === 0) return;
+    const targetIds = new Set(reviewCommentIds);
+    const [owner, name] = repositoryOwnerAndName(repository);
+    const threadIds = /* @__PURE__ */ new Set();
+    let after = null;
+    for (; ; ) {
+      const page = await this.#graphqlRequest(reviewThreadsQuery, {
+        owner,
+        name,
+        number: pullRequestNumber,
+        after
+      }).then((data) => data.repository.pullRequest.reviewThreads);
+      for (const thread of page.nodes) {
+        if (thread.isResolved) continue;
+        if (thread.comments.nodes.some(
+          (comment) => comment.databaseId !== null && targetIds.has(comment.databaseId)
+        )) {
+          threadIds.add(thread.id);
+        }
+      }
+      if (!page.pageInfo.hasNextPage) break;
+      after = page.pageInfo.endCursor;
+    }
+    for (const threadId of threadIds) {
+      await this.#graphqlRequest(resolveReviewThreadMutation, { threadId });
+    }
+  }
   async listCheckRuns(repository, ref) {
     if (!/^[0-9a-f]{40}$/.test(ref)) {
       throw new Error("invalid GitHub check run ref");
@@ -410,6 +438,37 @@ var GitHubClient = class {
     if (!response.ok) throw await responseError(method, path2, response);
     return await response.json();
   }
+  async #graphqlRequest(query, variables) {
+    const headers = {
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json",
+      "User-Agent": "engineering-agent-workflows/issue-triage"
+    };
+    if (this.#token) headers.Authorization = `Bearer ${this.#token}`;
+    const response = await fetchWithRetry({
+      request: this.#fetch,
+      input: `${this.#baseUrl}/graphql`,
+      init: {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ query, variables })
+      },
+      operation: "GitHub GraphQL request",
+      retryable: false,
+      ...this.#sleep ? { sleep: this.#sleep } : {}
+    });
+    if (!response.ok) throw await responseError("POST", "/graphql", response);
+    const payload = await response.json();
+    if (payload.errors?.length) {
+      throw new Error(
+        `GitHub GraphQL request failed: ${payload.errors.map((error) => error.message).join("; ")}`
+      );
+    }
+    if (payload.data === void 0) {
+      throw new Error("GitHub GraphQL request returned no data");
+    }
+    return payload.data;
+  }
   #rawRequest(method, path2, body) {
     const headers = {
       Accept: "application/vnd.github+json",
@@ -439,6 +498,38 @@ function repositoryPath2(repository) {
   }
   return parts.map(encodeURIComponent).join("/");
 }
+function repositoryOwnerAndName(repository) {
+  const parts = repository.split("/");
+  if (parts.length !== 2 || parts.some((part) => !part.trim())) {
+    throw new Error(`invalid GitHub repository: ${repository}`);
+  }
+  return [parts[0], parts[1]];
+}
+var reviewThreadsQuery = `
+  query($owner: String!, $name: String!, $number: Int!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id
+            isResolved
+            comments(first: 100) {
+              nodes { databaseId }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+var resolveReviewThreadMutation = `
+  mutation($threadId: ID!) {
+    resolveReviewThread(input: { threadId: $threadId }) {
+      thread { id isResolved }
+    }
+  }
+`;
 function normalizeIssue(issue2) {
   return {
     number: issue2.number,

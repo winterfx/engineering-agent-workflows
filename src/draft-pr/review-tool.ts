@@ -317,6 +317,14 @@ export async function applyReviewFix(
       conversationComments,
       dependencies,
     );
+    if (dependencies.apply && status === "no-change") {
+      await resolveAddressedThreads(
+        repository,
+        pullRequestNumber,
+        submission.analysis.findings,
+        dependencies,
+      );
+    }
     return {
       ok: true,
       repository,
@@ -386,6 +394,12 @@ export async function applyReviewFix(
     dependencies,
   );
   await dependencies.workspace.cleanupReview(repository, pullRequestNumber);
+  await resolveAddressedThreads(
+    repository,
+    pullRequestNumber,
+    submission.analysis.findings,
+    dependencies,
+  );
   return {
     ok: true,
     repository,
@@ -631,6 +645,37 @@ async function finishWithoutPush(
     );
   }
   await dependencies.workspace.cleanupReview(repository, pullRequestNumber);
+}
+
+async function resolveAddressedThreads(
+  repository: string,
+  pullRequestNumber: number,
+  findings: ReviewFixAnalysis["findings"],
+  dependencies: ReviewFixDependencies,
+): Promise<void> {
+  const commentIds = findings
+    .filter(
+      (finding) =>
+        finding.source === "review_comment" &&
+        (finding.disposition === "fixed" ||
+          finding.disposition === "not_reproducible"),
+    )
+    .map((finding) => finding.commentId);
+  if (commentIds.length === 0) return;
+  try {
+    await dependencies.provider.resolveReviewThreads(
+      repository,
+      pullRequestNumber,
+      commentIds,
+    );
+  } catch (error) {
+    // Best-effort: the fix itself already landed (commit pushed or verified
+    // not reproducible) — a GraphQL hiccup resolving the thread shouldn't
+    // fail the whole review-fix run.
+    console.error(
+      `failed to resolve Review thread comments in ${repository}#${pullRequestNumber}: ${errorMessage(error)}`,
+    );
+  }
 }
 
 async function upsertReviewState(

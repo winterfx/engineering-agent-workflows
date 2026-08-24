@@ -52,6 +52,8 @@ const policy: DraftPrPolicy = {
 };
 
 class FakeProvider implements ReviewFixProvider {
+  resolvedThreadCalls: number[][] = [];
+  resolveReviewThreadsError: Error | undefined;
   pullRequest: DraftPullRequest = {
     number: pullRequestNumber,
     url: `https://github.test/${repository}/pull/${pullRequestNumber}`,
@@ -146,6 +148,14 @@ class FakeProvider implements ReviewFixProvider {
   }
   async getPullRequestReview(): Promise<PullRequestReview> {
     return structuredClone(this.review);
+  }
+  async resolveReviewThreads(
+    _repository: string,
+    _pullRequestNumber: number,
+    reviewCommentIds: number[],
+  ): Promise<void> {
+    this.resolvedThreadCalls.push(reviewCommentIds);
+    if (this.resolveReviewThreadsError) throw this.resolveReviewThreadsError;
   }
   async listOpenPullRequests(): Promise<DraftPullRequest[]> {
     return [{ ...this.pullRequest }];
@@ -266,6 +276,9 @@ describe("Draft PR requested-changes review fix", () => {
     const status = provider.comments.find((comment) => comment.id === 1000)!;
     expect(status.body).toContain("review=700 iterations=1");
     expect(status.body).toContain("status=fixed");
+    // Only the inline review_comment findings resolve — the Review body
+    // itself (commentId 700) is not a review thread.
+    expect(provider.resolvedThreadCalls).toEqual([[10, 11]]);
   });
 
   it("does not treat ordinary PR conversation comments as findings", async () => {
@@ -380,7 +393,11 @@ describe("Draft PR requested-changes review fix", () => {
     const provider = new FakeProvider();
     provider.review.state = "COMMENTED";
     provider.review.authorAssociation = "NONE";
-    provider.review.user = { login: "some-other-bot[bot]", id: 901, type: "Bot" };
+    provider.review.user = {
+      login: "some-other-bot[bot]",
+      id: 901,
+      type: "Bot",
+    };
 
     const prepared = await prepareReviewFix(
       repository,
@@ -506,6 +523,94 @@ describe("Draft PR requested-changes review fix", () => {
         deps,
       ),
     ).rejects.toThrow("requires every finding to be not reproducible");
+  });
+
+  it("resolves review comment threads for a not-reproducible no_change outcome", async () => {
+    const provider = new FakeProvider();
+    const workspace = new FakeWorkspace();
+    workspace.inspection = {
+      ...workspace.inspection,
+      changedFiles: [],
+      additions: 0,
+      deletions: 0,
+    };
+    const deps = dependencies(provider, workspace);
+    const prepared = await prepareReviewFix(
+      repository,
+      pullRequestNumber,
+      reviewId,
+      deps,
+    );
+    const input = submission(prepared);
+
+    const result = await applyReviewFix(
+      repository,
+      pullRequestNumber,
+      {
+        ...input,
+        analysis: {
+          ...input.analysis,
+          outcome: "no_change",
+          findings: input.analysis.findings.map((finding) => ({
+            ...finding,
+            disposition: "not_reproducible",
+          })),
+        },
+      },
+      deps,
+    );
+
+    expect(result.outcome).toBe("no_change");
+    expect(provider.resolvedThreadCalls).toEqual([[10, 11]]);
+  });
+
+  it("does not resolve any thread when the fix needs approval", async () => {
+    const provider = new FakeProvider();
+    const workspace = new FakeWorkspace();
+    const limitedPolicy = { ...policy, maxChangedFiles: 0 };
+    const deps = {
+      ...dependencies(provider, workspace),
+      policy: limitedPolicy,
+    };
+    const prepared = await prepareReviewFix(
+      repository,
+      pullRequestNumber,
+      reviewId,
+      deps,
+    );
+
+    const result = await applyReviewFix(
+      repository,
+      pullRequestNumber,
+      submission(prepared),
+      deps,
+    );
+
+    expect(result.outcome).toBe("needs_approval");
+    expect(provider.resolvedThreadCalls).toEqual([]);
+  });
+
+  it("does not fail the run when resolving threads errors out", async () => {
+    const provider = new FakeProvider();
+    provider.resolveReviewThreadsError = new Error("GraphQL is down");
+    const workspace = new FakeWorkspace();
+    const deps = dependencies(provider, workspace);
+    const prepared = await prepareReviewFix(
+      repository,
+      pullRequestNumber,
+      reviewId,
+      deps,
+    );
+
+    const result = await applyReviewFix(
+      repository,
+      pullRequestNumber,
+      submission(prepared),
+      deps,
+    );
+
+    expect(result.outcome).toBe("fixed");
+    expect(workspace.cleanupCalls).toBe(1);
   });
 });
 
