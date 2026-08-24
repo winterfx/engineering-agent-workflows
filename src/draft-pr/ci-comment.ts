@@ -40,7 +40,7 @@ export function parseCiFixState(comment: IssueComment | undefined): CiFixState {
   };
 }
 
-export function buildCiFixComment(state: CiFixState): string {
+export function buildCiFixComment(state: CiFixState, detail?: string): string {
   const marker = `${CI_FIX_COMMENT_PREFIX} suite=${state.checkSuiteId} attempts=${state.attempts} head=${state.headSha || "none"} status=${state.status} -->`;
   const messages: Record<CiFixStatus, string> = {
     fixing: "The Draft PR Agent is validating the latest failed CI checks.",
@@ -51,7 +51,9 @@ export function buildCiFixComment(state: CiFixState): string {
     "needs-approval": "Automatic CI fixes paused for maintainer review.",
     failed: "The Draft PR Agent could not complete the latest CI fix attempt.",
   };
-  return [marker, "## CI follow-up", "", messages[state.status]].join("\n");
+  const lines = [marker, "## CI follow-up", "", messages[state.status]];
+  if (detail) lines.push("", detail);
+  return lines.join("\n");
 }
 
 function emptyCiFixState(): CiFixState {

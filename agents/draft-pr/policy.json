@@ -13,7 +13,7 @@
   "maxChangedLines": 1500,
   "maxReviewComments": 50,
   "maxValidationFixIterations": 2,
-  "maxFixIterations": 3,
+  "maxFixIterations": 5,
   "requiredValidationGates": ["task-prepare", "task-lint", "task-test-unit"],
   "allowedValidationFailureCases": [
     "TestConfigStoreCRUDCoverageWorkflows",

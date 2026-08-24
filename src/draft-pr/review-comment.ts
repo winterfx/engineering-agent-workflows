@@ -69,7 +69,10 @@ export function parseReviewFixState(
   };
 }
 
-export function buildReviewFixComment(state: ReviewFixState): string {
+export function buildReviewFixComment(
+  state: ReviewFixState,
+  detail?: string,
+): string {
   const marker = `${REVIEW_FIX_COMMENT_V3_PREFIX} review=${state.reviewCursor} iterations=${state.iterations} head=${state.headSha || "none"} status=${state.status} -->`;
   const messages: Record<ReviewFixStatus, string> = {
     fixing: "The Draft PR Agent is validating a requested change.",
@@ -81,7 +84,9 @@ export function buildReviewFixComment(state: ReviewFixState): string {
     failed:
       "The Draft PR Agent could not complete the latest Review fix attempt.",
   };
-  return [marker, "## Review follow-up", "", messages[state.status]].join("\n");
+  const lines = [marker, "## Review follow-up", "", messages[state.status]];
+  if (detail) lines.push("", detail);
+  return lines.join("\n");
 }
 
 function emptyReviewFixState(): ReviewFixState {

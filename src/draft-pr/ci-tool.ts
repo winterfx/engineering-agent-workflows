@@ -132,6 +132,7 @@ export async function prepareCiFix(
         },
         comments,
         dependencies,
+        `Reached the automatic fix limit of ${dependencies.policy.maxFixIterations} attempts for this Pull Request without a maintainer-approved resolution. Automatic CI fixes are paused — a maintainer needs to fix the remaining CI failures manually.`,
       );
     }
     return skipped(
@@ -565,11 +566,12 @@ async function upsertCiState(
   state: CiFixState,
   comments: IssueComment[],
   dependencies: CiFixDependencies,
+  detail?: string,
 ): Promise<void> {
   const botLogin = dependencies.botLogin?.trim() ?? "";
   if (!botLogin) throw new Error("GitHub bot login is required in apply mode");
   const existing = findCiFixComment(comments, botLogin);
-  const body = buildCiFixComment(state);
+  const body = buildCiFixComment(state, detail);
   if (existing) {
     await dependencies.provider.updateComment(
       repository,

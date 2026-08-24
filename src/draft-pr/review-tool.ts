@@ -175,6 +175,7 @@ export async function prepareReviewFix(
         },
         conversationComments,
         dependencies,
+        `Reached the automatic fix limit of ${dependencies.policy.maxFixIterations} attempts for this Pull Request without a maintainer-approved resolution. Automatic Review fixes are paused — a maintainer needs to address the remaining findings manually.`,
       );
     }
     return skipped(
@@ -684,11 +685,12 @@ async function upsertReviewState(
   state: ReviewFixState,
   comments: IssueComment[],
   dependencies: ReviewFixDependencies,
+  detail?: string,
 ): Promise<void> {
   const botLogin = dependencies.botLogin?.trim();
   if (!botLogin)
     throw new Error("Draft PR bot login is required in apply mode");
-  const body = buildReviewFixComment(state);
+  const body = buildReviewFixComment(state, detail);
   const existing = findReviewFixComment(comments, botLogin);
   if (existing) {
     await dependencies.provider.updateComment(

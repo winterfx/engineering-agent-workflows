@@ -721,7 +721,7 @@ function parseCiFixState(comment) {
     status: match[4]
   };
 }
-function buildCiFixComment(state) {
+function buildCiFixComment(state, detail) {
   const marker = `${CI_FIX_COMMENT_PREFIX} suite=${state.checkSuiteId} attempts=${state.attempts} head=${state.headSha || "none"} status=${state.status} -->`;
   const messages = {
     fixing: "The Draft PR Agent is validating the latest failed CI checks.",
@@ -730,7 +730,9 @@ function buildCiFixComment(state) {
     "needs-approval": "Automatic CI fixes paused for maintainer review.",
     failed: "The Draft PR Agent could not complete the latest CI fix attempt."
   };
-  return [marker, "## CI follow-up", "", messages[state.status]].join("\n");
+  const lines = [marker, "## CI follow-up", "", messages[state.status]];
+  if (detail) lines.push("", detail);
+  return lines.join("\n");
 }
 function emptyCiFixState() {
   return {
@@ -6250,7 +6252,8 @@ async function prepareCiFix(repository, pullRequestNumber, expectedHeadSha, chec
           status: "needs-approval"
         },
         comments,
-        dependencies
+        dependencies,
+        `Reached the automatic fix limit of ${dependencies.policy.maxFixIterations} attempts for this Pull Request without a maintainer-approved resolution. Automatic CI fixes are paused \u2014 a maintainer needs to fix the remaining CI failures manually.`
       );
     }
     return skipped(
@@ -6582,11 +6585,11 @@ async function finishWithoutPush(repository, pullRequestNumber, submission, atte
   }
   await dependencies.workspace.cleanupReview(repository, pullRequestNumber);
 }
-async function upsertCiState(repository, pullRequestNumber, state, comments, dependencies) {
+async function upsertCiState(repository, pullRequestNumber, state, comments, dependencies, detail) {
   const botLogin = dependencies.botLogin?.trim() ?? "";
   if (!botLogin) throw new Error("GitHub bot login is required in apply mode");
   const existing = findCiFixComment(comments, botLogin);
-  const body = buildCiFixComment(state);
+  const body = buildCiFixComment(state, detail);
   if (existing) {
     await dependencies.provider.updateComment(
       repository,
@@ -6670,7 +6673,7 @@ function parseReviewFixState(comment) {
     status: v1Match[4]
   };
 }
-function buildReviewFixComment(state) {
+function buildReviewFixComment(state, detail) {
   const marker = `${REVIEW_FIX_COMMENT_V3_PREFIX} review=${state.reviewCursor} iterations=${state.iterations} head=${state.headSha || "none"} status=${state.status} -->`;
   const messages = {
     fixing: "The Draft PR Agent is validating a requested change.",
@@ -6679,7 +6682,9 @@ function buildReviewFixComment(state) {
     "needs-approval": "Automatic Review fixes paused for maintainer approval.",
     failed: "The Draft PR Agent could not complete the latest Review fix attempt."
   };
-  return [marker, "## Review follow-up", "", messages[state.status]].join("\n");
+  const lines = [marker, "## Review follow-up", "", messages[state.status]];
+  if (detail) lines.push("", detail);
+  return lines.join("\n");
 }
 function emptyReviewFixState() {
   return {
@@ -6801,7 +6806,8 @@ async function prepareReviewFix(repository, pullRequestNumber, reviewId, depende
           status: "needs-approval"
         },
         conversationComments,
-        dependencies
+        dependencies,
+        `Reached the automatic fix limit of ${dependencies.policy.maxFixIterations} attempts for this Pull Request without a maintainer-approved resolution. Automatic Review fixes are paused \u2014 a maintainer needs to address the remaining findings manually.`
       );
     }
     return skipped2(
@@ -7190,11 +7196,11 @@ async function resolveAddressedThreads(repository, pullRequestNumber, findings, 
     );
   }
 }
-async function upsertReviewState(repository, pullRequestNumber, state, comments, dependencies) {
+async function upsertReviewState(repository, pullRequestNumber, state, comments, dependencies, detail) {
   const botLogin = dependencies.botLogin?.trim();
   if (!botLogin)
     throw new Error("Draft PR bot login is required in apply mode");
-  const body = buildReviewFixComment(state);
+  const body = buildReviewFixComment(state, detail);
   const existing = findReviewFixComment(comments, botLogin);
   if (existing) {
     await dependencies.provider.updateComment(
