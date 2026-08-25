@@ -52,6 +52,8 @@ export const reviewFixSubmissionSchema = object({
   expectedHeadSha: string().regex(/^[0-9a-f]{40}$/),
   previousReviewCursor: number().int().nonnegative(),
   previousIterations: number().int().nonnegative(),
+  findingFingerprint: string().regex(/^[0-9a-f]{20}$/),
+  repeatedFindings: number().int().positive(),
   analysis: reviewFixAnalysisSchema,
 });
 

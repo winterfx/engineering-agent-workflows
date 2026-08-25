@@ -352,6 +352,14 @@ var GitHubClient = class {
       await this.#graphqlRequest(resolveReviewThreadMutation, { threadId });
     }
   }
+  async replyToReviewComment(repository, pullRequestNumber, reviewCommentId, body) {
+    const comment = await this.#request(
+      "POST",
+      `/repos/${repositoryPath2(repository)}/pulls/${pullRequestNumber}/comments/${reviewCommentId}/replies`,
+      { body }
+    );
+    return normalizeReviewComment(comment);
+  }
   async listCheckRuns(repository, ref) {
     if (!/^[0-9a-f]{40}$/.test(ref)) {
       throw new Error("invalid GitHub check run ref");

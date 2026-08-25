@@ -53,6 +53,8 @@ const policy: DraftPrPolicy = {
 
 class FakeProvider implements ReviewFixProvider {
   resolvedThreadCalls: number[][] = [];
+  reviewReplyCalls: Array<{ commentId: number; body: string }> = [];
+  reviewReplyError: Error | undefined;
   resolveReviewThreadsError: Error | undefined;
   pullRequest: DraftPullRequest = {
     number: pullRequestNumber,
@@ -156,6 +158,24 @@ class FakeProvider implements ReviewFixProvider {
   ): Promise<void> {
     this.resolvedThreadCalls.push(reviewCommentIds);
     if (this.resolveReviewThreadsError) throw this.resolveReviewThreadsError;
+  }
+  async replyToReviewComment(
+    _repository: string,
+    _pullRequestNumber: number,
+    reviewCommentId: number,
+    body: string,
+  ): Promise<PullRequestReviewComment> {
+    this.reviewReplyCalls.push({ commentId: reviewCommentId, body });
+    if (this.reviewReplyError) throw this.reviewReplyError;
+    const comment: PullRequestReviewComment = {
+      id: 2000 + this.reviewReplyCalls.length,
+      body,
+      path: "pkg/reply.go",
+      inReplyToId: reviewCommentId,
+      user: { login: botLogin, type: "Bot" },
+    };
+    this.reviewComments.push(comment);
+    return comment;
   }
   async listOpenPullRequests(): Promise<DraftPullRequest[]> {
     return [{ ...this.pullRequest }];
@@ -279,6 +299,12 @@ describe("Draft PR requested-changes review fix", () => {
     // Only the inline review_comment findings resolve — the Review body
     // itself (commentId 700) is not a review thread.
     expect(provider.resolvedThreadCalls).toEqual([[10, 11]]);
+    expect(provider.reviewReplyCalls.map((call) => call.commentId)).toEqual([
+      10, 11,
+    ]);
+    expect(provider.reviewReplyCalls[0]?.body).toContain(
+      "Addressed by the Draft PR Agent",
+    );
   });
 
   it("does not treat ordinary PR conversation comments as findings", async () => {
@@ -353,6 +379,118 @@ describe("Draft PR requested-changes review fix", () => {
     );
     expect(workspace.preparedReviewCalls).toBe(0);
     expect(provider.comments.at(-1)?.body).toContain("status=needs-approval");
+  });
+
+  it("continues after five successful rounds when the scanner reports different findings", async () => {
+    const baselineProvider = new FakeProvider();
+    const baseline = await prepareReviewFix(
+      repository,
+      pullRequestNumber,
+      reviewId,
+      dependencies(baselineProvider, new FakeWorkspace(), false),
+    );
+    const provider = new FakeProvider();
+    provider.review.body = "A newly discovered scanner finding.";
+    provider.comments.push({
+      id: 1000,
+      body: `<!-- engineering-agent-workflows:review-fix:v4 review=699 iterations=5 head=${headSha} status=fixed finding=${baseline.findingFingerprint} repeats=5 -->\n## Review follow-up`,
+      user: { login: botLogin, type: "Bot" },
+    });
+    const workspace = new FakeWorkspace();
+    const deps = {
+      ...dependencies(provider, workspace),
+      policy: { ...policy, maxFixIterations: 5 },
+    };
+
+    const prepared = await prepareReviewFix(
+      repository,
+      pullRequestNumber,
+      reviewId,
+      deps,
+    );
+
+    expect(prepared.skipped).not.toBe(true);
+    expect(prepared.previousIterations).toBe(5);
+    expect(prepared.repeatedFindings).toBe(1);
+    expect(workspace.preparedReviewCalls).toBe(1);
+  });
+
+  it("pauses and replies when the same scanner findings survive five attempts", async () => {
+    const provider = new FakeProvider();
+    const dryRun = await prepareReviewFix(
+      repository,
+      pullRequestNumber,
+      reviewId,
+      dependencies(provider, new FakeWorkspace(), false),
+    );
+    provider.comments.push({
+      id: 1000,
+      body: `<!-- engineering-agent-workflows:review-fix:v4 review=699 iterations=5 head=${headSha} status=fixed finding=${dryRun.findingFingerprint} repeats=5 -->\n## Review follow-up`,
+      user: { login: botLogin, type: "Bot" },
+    });
+    const workspace = new FakeWorkspace();
+    const deps = {
+      ...dependencies(provider, workspace),
+      policy: { ...policy, maxFixIterations: 5 },
+    };
+
+    const prepared = await prepareReviewFix(
+      repository,
+      pullRequestNumber,
+      reviewId,
+      deps,
+    );
+
+    expect(prepared).toEqual(
+      expect.objectContaining({
+        skipped: true,
+        reason: expect.stringContaining("repeated findings"),
+      }),
+    );
+    expect(workspace.preparedReviewCalls).toBe(0);
+    expect(provider.comments.at(-1)?.body).toContain(
+      "The same findings remained after 5 automatic attempts",
+    );
+    expect(provider.reviewReplyCalls).toHaveLength(2);
+    expect(provider.reviewReplyCalls[0]?.body).toContain(
+      "finding persisted through the configured repeat limit",
+    );
+
+    await prepareReviewFix(repository, pullRequestNumber, reviewId, deps);
+    expect(provider.reviewReplyCalls).toHaveLength(2);
+  });
+
+  it("resets the repeated-finding circuit breaker after a maintainer push", async () => {
+    const provider = new FakeProvider();
+    const dryRun = await prepareReviewFix(
+      repository,
+      pullRequestNumber,
+      reviewId,
+      dependencies(provider, new FakeWorkspace(), false),
+    );
+    provider.comments.push({
+      id: 1000,
+      body: `<!-- engineering-agent-workflows:review-fix:v4 review=699 iterations=5 head=${headSha} status=needs-approval finding=${dryRun.findingFingerprint} repeats=5 -->\n## Review follow-up`,
+      user: { login: botLogin, type: "Bot" },
+    });
+    const maintainerHead = "c".repeat(40);
+    provider.pullRequest.headSha = maintainerHead;
+    provider.review.commitId = maintainerHead;
+    const workspace = new FakeWorkspace();
+
+    const prepared = await prepareReviewFix(
+      repository,
+      pullRequestNumber,
+      reviewId,
+      {
+        ...dependencies(provider, workspace),
+        policy: { ...policy, maxFixIterations: 5 },
+      },
+    );
+
+    expect(prepared.skipped).not.toBe(true);
+    expect(prepared.repeatedFindings).toBe(1);
+    expect(workspace.preparedReviewCalls).toBe(1);
   });
 
   it("accepts a COMMENTED Review from an allowlisted bot login", async () => {
@@ -562,6 +700,7 @@ describe("Draft PR requested-changes review fix", () => {
 
     expect(result.outcome).toBe("no_change");
     expect(provider.resolvedThreadCalls).toEqual([[10, 11]]);
+    expect(provider.reviewReplyCalls).toHaveLength(2);
   });
 
   it("does not resolve any thread when the fix needs approval", async () => {
@@ -588,6 +727,9 @@ describe("Draft PR requested-changes review fix", () => {
 
     expect(result.outcome).toBe("needs_approval");
     expect(provider.resolvedThreadCalls).toEqual([]);
+    expect(provider.reviewReplyCalls[0]?.body).toContain(
+      "paused for maintainer approval",
+    );
   });
 
   it("does not fail the run when resolving threads errors out", async () => {
@@ -612,6 +754,30 @@ describe("Draft PR requested-changes review fix", () => {
     expect(result.outcome).toBe("fixed");
     expect(workspace.cleanupCalls).toBe(1);
   });
+
+  it("leaves threads open when the per-finding reply cannot be posted", async () => {
+    const provider = new FakeProvider();
+    provider.reviewReplyError = new Error("reply API is down");
+    const workspace = new FakeWorkspace();
+    const deps = dependencies(provider, workspace);
+    const prepared = await prepareReviewFix(
+      repository,
+      pullRequestNumber,
+      reviewId,
+      deps,
+    );
+
+    const result = await applyReviewFix(
+      repository,
+      pullRequestNumber,
+      submission(prepared),
+      deps,
+    );
+
+    expect(result.outcome).toBe("fixed");
+    expect(provider.reviewReplyCalls).toHaveLength(2);
+    expect(provider.resolvedThreadCalls).toEqual([]);
+  });
 });
 
 function submission(prepared: Awaited<ReturnType<typeof prepareReviewFix>>) {
@@ -629,6 +795,8 @@ function submission(prepared: Awaited<ReturnType<typeof prepareReviewFix>>) {
     expectedHeadSha: prepared.expectedHeadSha!,
     previousReviewCursor: prepared.previousReviewCursor!,
     previousIterations: prepared.previousIterations!,
+    findingFingerprint: prepared.findingFingerprint!,
+    repeatedFindings: prepared.repeatedFindings!,
     analysis: {
       outcome: "fixed" as const,
       commitTitle: "fix(webhooks): address requested changes",

@@ -225,6 +225,20 @@ export class GitHubClient implements CiFixProvider, ReviewFixProvider {
     }
   }
 
+  async replyToReviewComment(
+    repository: string,
+    pullRequestNumber: number,
+    reviewCommentId: number,
+    body: string,
+  ): Promise<PullRequestReviewComment> {
+    const comment = await this.#request<GitHubPullRequestReviewCommentAPI>(
+      "POST",
+      `/repos/${repositoryPath(repository)}/pulls/${pullRequestNumber}/comments/${reviewCommentId}/replies`,
+      { body },
+    );
+    return normalizeReviewComment(comment);
+  }
+
   async listCheckRuns(repository: string, ref: string): Promise<CheckRun[]> {
     if (!/^[0-9a-f]{40}$/.test(ref)) {
       throw new Error("invalid GitHub check run ref");

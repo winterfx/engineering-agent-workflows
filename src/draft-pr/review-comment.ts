@@ -4,6 +4,7 @@ export const REVIEW_FIX_COMMENT_PREFIX =
   "<!-- engineering-agent-workflows:review-fix:v";
 const REVIEW_FIX_COMMENT_V2_PREFIX = `${REVIEW_FIX_COMMENT_PREFIX}2`;
 const REVIEW_FIX_COMMENT_V3_PREFIX = `${REVIEW_FIX_COMMENT_PREFIX}3`;
+const REVIEW_FIX_COMMENT_V4_PREFIX = `${REVIEW_FIX_COMMENT_PREFIX}4`;
 
 export type ReviewFixStatus =
   "fixing" | "fixed" | "no-change" | "needs-approval" | "failed";
@@ -13,6 +14,8 @@ export interface ReviewFixState {
   iterations: number;
   headSha: string;
   status: ReviewFixStatus;
+  findingFingerprint: string;
+  repeatedFindings: number;
 }
 
 export function findReviewFixComment(
@@ -32,6 +35,19 @@ export function parseReviewFixState(
 ): ReviewFixState {
   if (!comment) return emptyReviewFixState();
   const marker = comment.body.split("\n", 1)[0] ?? "";
+  const v4Match = marker.match(
+    /^<!-- engineering-agent-workflows:review-fix:v4 review=(\d+) iterations=(\d+) head=([0-9a-f]{40}|none) status=(fixing|fixed|no-change|needs-approval|failed) finding=([0-9a-f]{20}|none) repeats=(\d+) -->$/,
+  );
+  if (v4Match) {
+    return {
+      reviewCursor: Number(v4Match[1]),
+      iterations: Number(v4Match[2]),
+      headSha: v4Match[3] === "none" ? "" : v4Match[3]!,
+      status: v4Match[4] as ReviewFixStatus,
+      findingFingerprint: v4Match[5] === "none" ? "" : v4Match[5]!,
+      repeatedFindings: Number(v4Match[6]),
+    };
+  }
   const v3Match = marker.match(
     /^<!-- engineering-agent-workflows:review-fix:v3 review=(\d+) iterations=(\d+) head=([0-9a-f]{40}|none) status=(fixing|fixed|no-change|needs-approval|failed) -->$/,
   );
@@ -41,6 +57,8 @@ export function parseReviewFixState(
       iterations: Number(v3Match[2]),
       headSha: v3Match[3] === "none" ? "" : v3Match[3]!,
       status: v3Match[4] as ReviewFixStatus,
+      findingFingerprint: "",
+      repeatedFindings: 0,
     };
   }
   const v2Match = marker.match(
@@ -55,6 +73,8 @@ export function parseReviewFixState(
       iterations: Number(v2Match[3]),
       headSha: v2Match[4] === "none" ? "" : v2Match[4]!,
       status: v2Match[5] as ReviewFixStatus,
+      findingFingerprint: "",
+      repeatedFindings: 0,
     };
   }
   const v1Match = marker.match(
@@ -66,6 +86,8 @@ export function parseReviewFixState(
     iterations: Number(v1Match[2]),
     headSha: v1Match[3] === "none" ? "" : v1Match[3]!,
     status: v1Match[4] as ReviewFixStatus,
+    findingFingerprint: "",
+    repeatedFindings: 0,
   };
 }
 
@@ -73,7 +95,7 @@ export function buildReviewFixComment(
   state: ReviewFixState,
   detail?: string,
 ): string {
-  const marker = `${REVIEW_FIX_COMMENT_V3_PREFIX} review=${state.reviewCursor} iterations=${state.iterations} head=${state.headSha || "none"} status=${state.status} -->`;
+  const marker = `${REVIEW_FIX_COMMENT_V4_PREFIX} review=${state.reviewCursor} iterations=${state.iterations} head=${state.headSha || "none"} status=${state.status} finding=${state.findingFingerprint || "none"} repeats=${state.repeatedFindings} -->`;
   const messages: Record<ReviewFixStatus, string> = {
     fixing: "The Draft PR Agent is validating a requested change.",
     fixed:
@@ -95,5 +117,7 @@ function emptyReviewFixState(): ReviewFixState {
     iterations: 0,
     headSha: "",
     status: "fixed",
+    findingFingerprint: "",
+    repeatedFindings: 0,
   };
 }

@@ -1124,6 +1124,8 @@ function runReviewFix(repository, pullRequestNumber, reviewId) {
         expectedHeadSha: prepared.expectedHeadSha,
         previousReviewCursor: prepared.previousReviewCursor,
         previousIterations: prepared.previousIterations,
+        findingFingerprint: prepared.findingFingerprint,
+        repeatedFindings: prepared.repeatedFindings,
         analysis,
       },
     });

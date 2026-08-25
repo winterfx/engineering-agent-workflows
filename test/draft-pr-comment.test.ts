@@ -29,15 +29,20 @@ describe("Draft PR Review status comment", () => {
       iterations: 2,
       headSha: "a".repeat(40),
       status: "fixed",
+      findingFingerprint: "c".repeat(20),
+      repeatedFindings: 2,
     });
 
-    expect(body).toContain("review-fix:v3 review=700 iterations=2");
+    expect(body).toContain("review-fix:v4 review=700 iterations=2");
+    expect(body).toContain(`finding=${"c".repeat(20)} repeats=2`);
     expect(body).toContain("## Review follow-up");
     expect(parseReviewFixState({ id: 1, body })).toEqual({
       reviewCursor: 700,
       iterations: 2,
       headSha: "a".repeat(40),
       status: "fixed",
+      findingFingerprint: "c".repeat(20),
+      repeatedFindings: 2,
     });
   });
 
@@ -50,6 +55,8 @@ describe("Draft PR Review status comment", () => {
       iterations: 1,
       headSha: "b".repeat(40),
       status: "failed",
+      findingFingerprint: "",
+      repeatedFindings: 0,
     });
   });
 });

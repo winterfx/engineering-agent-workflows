@@ -465,6 +465,36 @@ describe("GitHubClient", () => {
     );
   });
 
+  it("replies to an inline Pull Request Review comment", async () => {
+    const requests: RecordedRequest[] = [];
+    const client = new GitHubClient({
+      baseUrl: "https://github.test/api",
+      fetch: recordingFetch(requests, () =>
+        jsonResponse({
+          id: 502,
+          body: "Addressed in abc123.",
+          path: "pkg/sessions/deletion_recovery.go",
+          in_reply_to_id: 501,
+          user: { login: "engineering-agent-bot", type: "Bot" },
+        }),
+      ),
+    });
+
+    const reply = await client.replyToReviewComment(
+      "chaitin/agent-compose",
+      440,
+      501,
+      "Addressed in abc123.",
+    );
+
+    expect(reply).toMatchObject({ id: 502, inReplyToId: 501 });
+    expect(requests[0]).toMatchObject({
+      url: "https://github.test/api/repos/chaitin/agent-compose/pulls/440/comments/501/replies",
+      method: "POST",
+      body: { body: "Addressed in abc123." },
+    });
+  });
+
   it("resolves only the review threads containing an addressed comment", async () => {
     const requests: RecordedRequest[] = [];
     const client = new GitHubClient({

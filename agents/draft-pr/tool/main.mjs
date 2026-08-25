@@ -352,6 +352,14 @@ var GitHubClient = class {
       await this.#graphqlRequest(resolveReviewThreadMutation, { threadId });
     }
   }
+  async replyToReviewComment(repository, pullRequestNumber, reviewCommentId, body) {
+    const comment = await this.#request(
+      "POST",
+      `/repos/${repositoryPath2(repository)}/pulls/${pullRequestNumber}/comments/${reviewCommentId}/replies`,
+      { body }
+    );
+    return normalizeReviewComment(comment);
+  }
   async listCheckRuns(repository, ref) {
     if (!/^[0-9a-f]{40}$/.test(ref)) {
       throw new Error("invalid GitHub check run ref");
@@ -6628,6 +6636,7 @@ import crypto4 from "node:crypto";
 var REVIEW_FIX_COMMENT_PREFIX = "<!-- engineering-agent-workflows:review-fix:v";
 var REVIEW_FIX_COMMENT_V2_PREFIX = `${REVIEW_FIX_COMMENT_PREFIX}2`;
 var REVIEW_FIX_COMMENT_V3_PREFIX = `${REVIEW_FIX_COMMENT_PREFIX}3`;
+var REVIEW_FIX_COMMENT_V4_PREFIX = `${REVIEW_FIX_COMMENT_PREFIX}4`;
 function findReviewFixComment(comments, botLogin) {
   const expected = botLogin.trim().toLowerCase();
   return comments.find(
@@ -6637,6 +6646,19 @@ function findReviewFixComment(comments, botLogin) {
 function parseReviewFixState(comment) {
   if (!comment) return emptyReviewFixState();
   const marker = comment.body.split("\n", 1)[0] ?? "";
+  const v4Match = marker.match(
+    /^<!-- engineering-agent-workflows:review-fix:v4 review=(\d+) iterations=(\d+) head=([0-9a-f]{40}|none) status=(fixing|fixed|no-change|needs-approval|failed) finding=([0-9a-f]{20}|none) repeats=(\d+) -->$/
+  );
+  if (v4Match) {
+    return {
+      reviewCursor: Number(v4Match[1]),
+      iterations: Number(v4Match[2]),
+      headSha: v4Match[3] === "none" ? "" : v4Match[3],
+      status: v4Match[4],
+      findingFingerprint: v4Match[5] === "none" ? "" : v4Match[5],
+      repeatedFindings: Number(v4Match[6])
+    };
+  }
   const v3Match = marker.match(
     /^<!-- engineering-agent-workflows:review-fix:v3 review=(\d+) iterations=(\d+) head=([0-9a-f]{40}|none) status=(fixing|fixed|no-change|needs-approval|failed) -->$/
   );
@@ -6645,7 +6667,9 @@ function parseReviewFixState(comment) {
       reviewCursor: Number(v3Match[1]),
       iterations: Number(v3Match[2]),
       headSha: v3Match[3] === "none" ? "" : v3Match[3],
-      status: v3Match[4]
+      status: v3Match[4],
+      findingFingerprint: "",
+      repeatedFindings: 0
     };
   }
   const v2Match = marker.match(
@@ -6659,7 +6683,9 @@ function parseReviewFixState(comment) {
       reviewCursor: 0,
       iterations: Number(v2Match[3]),
       headSha: v2Match[4] === "none" ? "" : v2Match[4],
-      status: v2Match[5]
+      status: v2Match[5],
+      findingFingerprint: "",
+      repeatedFindings: 0
     };
   }
   const v1Match = marker.match(
@@ -6670,11 +6696,13 @@ function parseReviewFixState(comment) {
     reviewCursor: 0,
     iterations: Number(v1Match[2]),
     headSha: v1Match[3] === "none" ? "" : v1Match[3],
-    status: v1Match[4]
+    status: v1Match[4],
+    findingFingerprint: "",
+    repeatedFindings: 0
   };
 }
 function buildReviewFixComment(state, detail) {
-  const marker = `${REVIEW_FIX_COMMENT_V3_PREFIX} review=${state.reviewCursor} iterations=${state.iterations} head=${state.headSha || "none"} status=${state.status} -->`;
+  const marker = `${REVIEW_FIX_COMMENT_V4_PREFIX} review=${state.reviewCursor} iterations=${state.iterations} head=${state.headSha || "none"} status=${state.status} finding=${state.findingFingerprint || "none"} repeats=${state.repeatedFindings} -->`;
   const messages = {
     fixing: "The Draft PR Agent is validating a requested change.",
     fixed: "The Draft PR Agent pushed a validated fix for the latest requested changes.",
@@ -6691,7 +6719,9 @@ function emptyReviewFixState() {
     reviewCursor: 0,
     iterations: 0,
     headSha: "",
-    status: "fixed"
+    status: "fixed",
+    findingFingerprint: "",
+    repeatedFindings: 0
   };
 }
 
@@ -6736,6 +6766,8 @@ var reviewFixSubmissionSchema = object({
   expectedHeadSha: string2().regex(/^[0-9a-f]{40}$/),
   previousReviewCursor: number2().int().nonnegative(),
   previousIterations: number2().int().nonnegative(),
+  findingFingerprint: string2().regex(/^[0-9a-f]{20}$/),
+  repeatedFindings: number2().int().positive(),
   analysis: reviewFixAnalysisSchema
 });
 
@@ -6779,6 +6811,7 @@ async function prepareReviewFix(repository, pullRequestNumber, reviewId, depende
         repository,
         pullRequestNumber,
         {
+          ...state,
           reviewCursor: state.reviewCursor,
           iterations: state.iterations,
           headSha: pullRequest.headSha,
@@ -6794,8 +6827,12 @@ async function prepareReviewFix(repository, pullRequestNumber, reviewId, depende
       `Review has ${findings.length} findings, exceeding the automatic limit of ${dependencies.policy.maxReviewComments}`
     );
   }
-  if (state.iterations >= dependencies.policy.maxFixIterations) {
+  const findingFingerprint = fingerprintFindingContent(findings);
+  const sameAutomatedSequence = state.headSha === pullRequest.headSha && state.findingFingerprint === findingFingerprint;
+  const repeatedFindings = sameAutomatedSequence ? state.repeatedFindings + 1 : 1;
+  if (sameAutomatedSequence && state.repeatedFindings >= dependencies.policy.maxFixIterations) {
     if (dependencies.apply) {
+      const detail = `The same findings remained after ${dependencies.policy.maxFixIterations} automatic attempts. Further automatic Review fixes are paused until a maintainer intervenes or the scanner reports a different finding.`;
       await upsertReviewState(
         repository,
         pullRequestNumber,
@@ -6803,17 +6840,28 @@ async function prepareReviewFix(repository, pullRequestNumber, reviewId, depende
           reviewCursor: state.reviewCursor,
           iterations: state.iterations,
           headSha: pullRequest.headSha,
-          status: "needs-approval"
+          status: "needs-approval",
+          findingFingerprint,
+          repeatedFindings: state.repeatedFindings
         },
         conversationComments,
         dependencies,
-        `Reached the automatic fix limit of ${dependencies.policy.maxFixIterations} attempts for this Pull Request without a maintainer-approved resolution. Automatic Review fixes are paused \u2014 a maintainer needs to address the remaining findings manually.`
+        detail
+      );
+      await replyToReviewFindings(
+        repository,
+        pullRequestNumber,
+        findings,
+        reviewComments,
+        "paused",
+        pullRequest.headSha,
+        dependencies
       );
     }
     return skipped2(
       repository,
       pullRequestNumber,
-      "automatic Review fix iteration limit reached"
+      "automatic Review fix limit reached for repeated findings"
     );
   }
   let prepared;
@@ -6844,7 +6892,9 @@ async function prepareReviewFix(repository, pullRequestNumber, reviewId, depende
         reviewCursor: state.reviewCursor,
         iterations: state.iterations,
         headSha: pullRequest.headSha,
-        status: "fixing"
+        status: "fixing",
+        findingFingerprint,
+        repeatedFindings
       },
       conversationComments,
       dependencies
@@ -6862,6 +6912,8 @@ async function prepareReviewFix(repository, pullRequestNumber, reviewId, depende
     reviewFingerprint: fingerprintFindings(findings),
     previousReviewCursor: state.reviewCursor,
     previousIterations: state.iterations,
+    findingFingerprint,
+    repeatedFindings,
     findings: findings.map((value) => toFinding(value))
   };
 }
@@ -6892,10 +6944,14 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
   }
   const expectedKeys = submission.findingRefs.map(findingKey);
   const preparedFindings = findingsForReview(review, reviewComments);
+  const persistedState = reviewState(conversationComments, dependencies);
   if (new Set(expectedKeys).size !== expectedKeys.length || preparedFindings.length !== submission.findingRefs.length || preparedFindings.some(
     (value) => !expectedKeys.includes(findingKey(value))
-  ) || fingerprintFindings(preparedFindings) !== submission.reviewFingerprint) {
+  ) || fingerprintFindings(preparedFindings) !== submission.reviewFingerprint || fingerprintFindingContent(preparedFindings) !== submission.findingFingerprint) {
     throw new Error("Pull Request Review changed after fix preparation");
+  }
+  if (dependencies.apply && (persistedState.reviewCursor !== submission.previousReviewCursor || persistedState.iterations !== submission.previousIterations || persistedState.findingFingerprint !== submission.findingFingerprint || persistedState.repeatedFindings !== submission.repeatedFindings)) {
+    throw new Error("Pull Request Review fix state changed after preparation");
   }
   const inspection = await dependencies.workspace.inspect(
     submission.workspacePath
@@ -6911,6 +6967,13 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
     submission.previousReviewCursor,
     submission.reviewId
   );
+  const nextStateBase = {
+    reviewCursor: nextReviewCursor,
+    iterations: nextIterations,
+    headSha: submission.expectedHeadSha,
+    findingFingerprint: submission.findingFingerprint,
+    repeatedFindings: submission.repeatedFindings
+  };
   if (submission.analysis.outcome !== "fixed") {
     if (submission.analysis.outcome === "no_change" && inspection.changedFiles.length > 0) {
       throw new Error("no_change review result contains repository changes");
@@ -6919,19 +6982,34 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
     await finishWithoutPush2(
       repository,
       pullRequestNumber,
-      nextReviewCursor,
-      nextIterations,
-      submission.expectedHeadSha,
-      status,
+      { ...nextStateBase, status },
       conversationComments,
-      dependencies
+      dependencies,
+      reviewOutcomeDetail(
+        status,
+        submission.reviewId,
+        submission.expectedHeadSha
+      )
     );
+    let acknowledgedCommentIds2 = /* @__PURE__ */ new Set();
+    if (dependencies.apply) {
+      acknowledgedCommentIds2 = await replyToReviewFindings(
+        repository,
+        pullRequestNumber,
+        preparedFindings,
+        reviewComments,
+        status,
+        submission.expectedHeadSha,
+        dependencies
+      );
+    }
     if (dependencies.apply && status === "no-change") {
       await resolveAddressedThreads(
         repository,
         pullRequestNumber,
         submission.analysis.findings,
-        dependencies
+        dependencies,
+        acknowledgedCommentIds2
       );
     }
     return {
@@ -6954,13 +7032,26 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
     await finishWithoutPush2(
       repository,
       pullRequestNumber,
-      nextReviewCursor,
-      nextIterations,
-      submission.expectedHeadSha,
-      "needs-approval",
+      { ...nextStateBase, status: "needs-approval" },
       conversationComments,
-      dependencies
+      dependencies,
+      reviewOutcomeDetail(
+        "needs-approval",
+        submission.reviewId,
+        submission.expectedHeadSha
+      )
     );
+    if (dependencies.apply) {
+      await replyToReviewFindings(
+        repository,
+        pullRequestNumber,
+        preparedFindings,
+        reviewComments,
+        "needs-approval",
+        submission.expectedHeadSha,
+        dependencies
+      );
+    }
     return {
       ok: true,
       repository,
@@ -6992,20 +7083,30 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
     repository,
     pullRequestNumber,
     {
-      reviewCursor: nextReviewCursor,
-      iterations: nextIterations,
+      ...nextStateBase,
       headSha: commit,
       status: "fixed"
     },
     conversationComments,
-    dependencies
+    dependencies,
+    reviewOutcomeDetail("fixed", submission.reviewId, commit)
   );
   await dependencies.workspace.cleanupReview(repository, pullRequestNumber);
+  const acknowledgedCommentIds = await replyToReviewFindings(
+    repository,
+    pullRequestNumber,
+    preparedFindings,
+    reviewComments,
+    "fixed",
+    commit,
+    dependencies
+  );
   await resolveAddressedThreads(
     repository,
     pullRequestNumber,
     submission.analysis.findings,
-    dependencies
+    dependencies,
+    acknowledgedCommentIds
   );
   return {
     ok: true,
@@ -7025,10 +7126,12 @@ async function failReviewFix(repository, pullRequestNumber, reviewCursor, iterat
         repository,
         pullRequestNumber
       );
+      const currentState = reviewState(comments, dependencies);
       await upsertReviewState(
         repository,
         pullRequestNumber,
         {
+          ...currentState,
           reviewCursor,
           iterations,
           headSha,
@@ -7167,21 +7270,75 @@ function validateFixedReview(analysis, inspection) {
     throw new Error("fixed review result reports a failed validation command");
   }
 }
-async function finishWithoutPush2(repository, pullRequestNumber, reviewCursor, iterations, headSha, status, comments, dependencies) {
+async function finishWithoutPush2(repository, pullRequestNumber, state, comments, dependencies, detail) {
   if (dependencies.apply) {
     await upsertReviewState(
       repository,
       pullRequestNumber,
-      { reviewCursor, iterations, headSha, status },
+      state,
       comments,
-      dependencies
+      dependencies,
+      detail
     );
   }
   await dependencies.workspace.cleanupReview(repository, pullRequestNumber);
 }
-async function resolveAddressedThreads(repository, pullRequestNumber, findings, dependencies) {
+async function replyToReviewFindings(repository, pullRequestNumber, findings, reviewComments, outcome, headSha, dependencies) {
+  const acknowledgedCommentIds = /* @__PURE__ */ new Set();
+  const botLogin = dependencies.botLogin?.trim().toLowerCase();
+  if (!botLogin) return acknowledgedCommentIds;
+  for (const finding of findings) {
+    if (finding.source !== "review_comment") continue;
+    const marker = `<!-- engineering-agent-workflows:review-reply:v1 comment=${finding.id} outcome=${outcome} -->`;
+    const alreadyReplied = reviewComments.some(
+      (comment) => comment.inReplyToId === finding.id && comment.user?.login.trim().toLowerCase() === botLogin && comment.body.startsWith(marker)
+    );
+    if (alreadyReplied) {
+      acknowledgedCommentIds.add(finding.id);
+      continue;
+    }
+    try {
+      await dependencies.provider.replyToReviewComment(
+        repository,
+        pullRequestNumber,
+        finding.id,
+        `${marker}
+${reviewReplyMessage(outcome, headSha)}`
+      );
+      acknowledgedCommentIds.add(finding.id);
+    } catch (error) {
+      console.error(
+        `failed to reply to Review comment ${finding.id} in ${repository}#${pullRequestNumber}: ${errorMessage(error)}`
+      );
+    }
+  }
+  return acknowledgedCommentIds;
+}
+function reviewReplyMessage(outcome, headSha) {
+  const shortSha = headSha.slice(0, 12);
+  if (outcome === "fixed")
+    return `Addressed by the Draft PR Agent in ${shortSha} after local validation.`;
+  if (outcome === "no-change")
+    return `Checked by the Draft PR Agent against ${shortSha}; no code change was required.`;
+  if (outcome === "needs-approval")
+    return "The Draft PR Agent checked this finding but paused for maintainer approval.";
+  if (outcome === "paused")
+    return "Automatic fixing paused because this finding persisted through the configured repeat limit; maintainer input is needed.";
+  return "The Draft PR Agent could not complete this finding automatically; maintainer input is needed.";
+}
+function reviewOutcomeDetail(status, reviewId, headSha) {
+  const shortSha = headSha.slice(0, 12);
+  if (status === "fixed")
+    return `Review ${reviewId} was addressed in commit ${shortSha}. Inline findings, when present, have per-finding follow-up in their threads.`;
+  if (status === "no-change")
+    return `Review ${reviewId} was checked against ${shortSha}; no code change was required.`;
+  if (status === "needs-approval")
+    return `Review ${reviewId} requires maintainer approval before the proposed change can proceed.`;
+  return `Review ${reviewId} could not be completed automatically.`;
+}
+async function resolveAddressedThreads(repository, pullRequestNumber, findings, dependencies, acknowledgedCommentIds) {
   const commentIds = findings.filter(
-    (finding) => finding.source === "review_comment" && (finding.disposition === "fixed" || finding.disposition === "not_reproducible")
+    (finding) => finding.source === "review_comment" && acknowledgedCommentIds.has(finding.commentId) && (finding.disposition === "fixed" || finding.disposition === "not_reproducible")
   ).map((finding) => finding.commentId);
   if (commentIds.length === 0) return;
   try {
@@ -7243,6 +7400,18 @@ function fingerprintFindings(findings) {
           diffHunk: comment.diffHunk ?? "",
           commitId: comment.commitId ?? ""
         } : {}
+      }))
+    )
+  ).digest("hex").slice(0, 20);
+}
+function fingerprintFindingContent(findings) {
+  return crypto4.createHash("sha256").update(
+    JSON.stringify(
+      findings.map(({ source, body, review, comment }) => ({
+        source,
+        body: body.trim(),
+        author: (review?.user ?? comment?.user)?.login.trim().toLowerCase() ?? "",
+        ...comment ? { path: comment.path } : {}
       }))
     )
   ).digest("hex").slice(0, 20);

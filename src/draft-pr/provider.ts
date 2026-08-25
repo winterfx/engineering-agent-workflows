@@ -67,6 +67,12 @@ export interface ReviewFixProvider extends DraftPrProvider {
     pullRequestNumber: number,
     reviewCommentIds: number[],
   ): Promise<void>;
+  replyToReviewComment(
+    repository: string,
+    pullRequestNumber: number,
+    reviewCommentId: number,
+    body: string,
+  ): Promise<PullRequestReviewComment>;
 }
 
 export interface CiFixProvider extends DraftPrProvider {
