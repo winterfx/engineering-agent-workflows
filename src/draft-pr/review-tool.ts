@@ -111,38 +111,63 @@ export async function prepareReviewFix(
 ): Promise<PreparedReviewFix> {
   assertAllowedRepository(repository, dependencies.allowedRepository);
   requireReviewBotIdentity(dependencies);
-  const [pullRequest, review, conversationComments, reviewComments] =
-    await Promise.all([
-      dependencies.provider.getPullRequest(repository, pullRequestNumber),
-      dependencies.provider.getPullRequestReview(
-        repository,
-        pullRequestNumber,
-        reviewId,
-      ),
-      dependencies.provider.listComments(repository, pullRequestNumber),
-      dependencies.provider.listReviewComments(repository, pullRequestNumber),
-    ]);
+  const [
+    pullRequest,
+    triggeringReview,
+    conversationComments,
+    reviewComments,
+    reviews,
+  ] = await Promise.all([
+    dependencies.provider.getPullRequest(repository, pullRequestNumber),
+    dependencies.provider.getPullRequestReview(
+      repository,
+      pullRequestNumber,
+      reviewId,
+    ),
+    dependencies.provider.listComments(repository, pullRequestNumber),
+    dependencies.provider.listReviewComments(repository, pullRequestNumber),
+    dependencies.provider.listPullRequestReviews(repository, pullRequestNumber),
+  ]);
   const reason = ineligibleReason(pullRequest, repository, dependencies);
   if (reason) return skipped(repository, pullRequestNumber, reason);
   const reviewReason = ineligibleReviewReason(
-    review,
+    triggeringReview,
     pullRequest,
     dependencies.policy,
   );
   if (reviewReason) return skipped(repository, pullRequestNumber, reviewReason);
 
   const state = reviewState(conversationComments, dependencies);
-  if (review.id <= state.reviewCursor) {
+  if (triggeringReview.id <= state.reviewCursor) {
     return skipped(
       repository,
       pullRequestNumber,
       "Pull Request Review was already processed",
     );
   }
-  const findings = findingsForReview(review, reviewComments);
+  // Sweep every review still ahead of the cursor, not just the one that
+  // triggered this run. A scanner (e.g. monkeyscan[bot]) that fires several
+  // independent reviews within seconds of each other can have its later
+  // reviews lose the per-Pull-Request workspace lock to whichever review
+  // fix run gets there first; that run silently skipping (see the
+  // DraftPrWorkspaceLockError handling below) must never be the only chance
+  // those later reviews get. Batching by cursor instead of by the single
+  // triggering review id means the run that does win the lock picks up
+  // every review already visible on the Pull Request, including ones whose
+  // own trigger was dropped.
+  const eligibleReviews = eligibleReviewsSince(
+    reviews,
+    pullRequest,
+    dependencies.policy,
+    state.reviewCursor,
+  );
+  const findings = findingsForReviews(eligibleReviews, reviewComments);
   if (findings.length === 0) {
     return skipped(repository, pullRequestNumber, "Review has no findings");
   }
+  const batchReviewId = Math.max(
+    ...eligibleReviews.map((eligibleReview) => eligibleReview.id),
+  );
   if (findings.length > dependencies.policy.maxReviewComments) {
     if (dependencies.apply) {
       await upsertReviewState(
@@ -255,7 +280,7 @@ export async function prepareReviewFix(
     branch: prepared.branch,
     baseBranch: prepared.baseBranch,
     expectedHeadSha: prepared.baseCommit,
-    reviewId: review.id,
+    reviewId: batchReviewId,
     reviewFingerprint: fingerprintFindings(findings),
     previousReviewCursor: state.reviewCursor,
     previousIterations: state.iterations,
@@ -274,30 +299,33 @@ export async function applyReviewFix(
   assertAllowedRepository(repository, dependencies.allowedRepository);
   requireReviewBotIdentity(dependencies);
   const submission = reviewFixSubmissionSchema.parse(submissionInput);
-  const [pullRequest, review, conversationComments, reviewComments] =
+  const [pullRequest, conversationComments, reviewComments, reviews] =
     await Promise.all([
       dependencies.provider.getPullRequest(repository, pullRequestNumber),
-      dependencies.provider.getPullRequestReview(
-        repository,
-        pullRequestNumber,
-        submission.reviewId,
-      ),
       dependencies.provider.listComments(repository, pullRequestNumber),
       dependencies.provider.listReviewComments(repository, pullRequestNumber),
+      dependencies.provider.listPullRequestReviews(
+        repository,
+        pullRequestNumber,
+      ),
     ]);
   const reason = ineligibleReason(pullRequest, repository, dependencies);
   if (reason) throw new Error(reason);
-  const reviewReason = ineligibleReviewReason(
-    review,
-    pullRequest,
-    dependencies.policy,
-  );
-  if (reviewReason) throw new Error(reviewReason);
   if (pullRequest.headSha !== submission.expectedHeadSha) {
     throw new Error("Pull Request head changed after review fix preparation");
   }
+  // Recompute the exact batch prepareReviewFix saw: every review still
+  // eligible since the previous cursor, capped at the review id the
+  // preparation step batched up to. The fingerprint checks below reject the
+  // apply if that batch's contents drifted in the meantime.
+  const eligibleReviews = eligibleReviewsSince(
+    reviews,
+    pullRequest,
+    dependencies.policy,
+    submission.previousReviewCursor,
+  ).filter((eligibleReview) => eligibleReview.id <= submission.reviewId);
   const expectedKeys = submission.findingRefs.map(findingKey);
-  const preparedFindings = findingsForReview(review, reviewComments);
+  const preparedFindings = findingsForReviews(eligibleReviews, reviewComments);
   const persistedState = reviewState(conversationComments, dependencies);
   if (
     new Set(expectedKeys).size !== expectedKeys.length ||
@@ -540,6 +568,66 @@ export async function failReviewFix(
   };
 }
 
+export interface PendingReviewFix {
+  repository: string;
+  pullRequestNumber: number;
+  reviewId: number;
+}
+
+export interface PendingReviewFixes {
+  ok: true;
+  pending: PendingReviewFix[];
+}
+
+/**
+ * Finds bot-managed Draft Pull Requests with a trusted Review still ahead of
+ * the stored cursor. Batching by cursor in {@link prepareReviewFix} closes
+ * the common case where a burst of reviews collides with the per-Pull-Request
+ * workspace lock, but a review whose own trigger is dropped and that is never
+ * followed by another review on the same Pull Request would otherwise wait
+ * forever for a next webhook that never comes. A periodic sweep that calls
+ * this and re-triggers `prepareReviewFix` for anything it finds closes that
+ * gap.
+ */
+export async function listPendingReviewFixes(
+  repository: string,
+  dependencies: ReviewFixDependencies,
+): Promise<PendingReviewFixes> {
+  assertAllowedRepository(repository, dependencies.allowedRepository);
+  const openPullRequests =
+    await dependencies.provider.listOpenPullRequests(repository);
+  const pending: PendingReviewFix[] = [];
+  for (const pullRequest of openPullRequests) {
+    if (ineligibleReason(pullRequest, repository, dependencies)) continue;
+    const [conversationComments, reviewComments, reviews] = await Promise.all([
+      dependencies.provider.listComments(repository, pullRequest.number),
+      dependencies.provider.listReviewComments(repository, pullRequest.number),
+      dependencies.provider.listPullRequestReviews(
+        repository,
+        pullRequest.number,
+      ),
+    ]);
+    const state = reviewState(conversationComments, dependencies);
+    const eligibleReviews = eligibleReviewsSince(
+      reviews,
+      pullRequest,
+      dependencies.policy,
+      state.reviewCursor,
+    );
+    if (findingsForReviews(eligibleReviews, reviewComments).length === 0) {
+      continue;
+    }
+    pending.push({
+      repository,
+      pullRequestNumber: pullRequest.number,
+      reviewId: Math.max(
+        ...eligibleReviews.map((eligibleReview) => eligibleReview.id),
+      ),
+    });
+  }
+  return { ok: true, pending };
+}
+
 function findingsForReview(
   review: PullRequestReview,
   reviewComments: PullRequestReviewComment[],
@@ -572,6 +660,17 @@ function findingsForReview(
         comment,
       })),
   );
+  return findings.sort(compareSourcedFindings);
+}
+
+function findingsForReviews(
+  reviews: PullRequestReview[],
+  reviewComments: PullRequestReviewComment[],
+): SourcedFinding[] {
+  const findings: SourcedFinding[] = [];
+  for (const review of reviews) {
+    findings.push(...findingsForReview(review, reviewComments));
+  }
   return findings.sort(compareSourcedFindings);
 }
 
@@ -627,6 +726,18 @@ function ineligibleReviewReason(
     return "Pull Request Review targets a stale head";
   }
   return undefined;
+}
+
+function eligibleReviewsSince(
+  reviews: PullRequestReview[],
+  pullRequest: DraftPullRequest,
+  policy: DraftPrPolicy,
+  cursor: number,
+): PullRequestReview[] {
+  return reviews
+    .filter((review) => review.id > cursor)
+    .filter((review) => !ineligibleReviewReason(review, pullRequest, policy))
+    .sort((left, right) => left.id - right.id);
 }
 
 function trustedReviewerAssociation(value: string): boolean {

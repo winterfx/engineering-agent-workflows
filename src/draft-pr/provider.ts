@@ -62,6 +62,10 @@ export interface ReviewFixProvider extends DraftPrProvider {
     pullRequestNumber: number,
     reviewId: number,
   ): Promise<PullRequestReview>;
+  listPullRequestReviews(
+    repository: string,
+    pullRequestNumber: number,
+  ): Promise<PullRequestReview[]>;
   resolveReviewThreads(
     repository: string,
     pullRequestNumber: number,

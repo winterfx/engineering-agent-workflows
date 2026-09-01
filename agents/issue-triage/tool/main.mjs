@@ -324,6 +324,17 @@ var GitHubClient = class {
     );
     return normalizePullRequestReview(review);
   }
+  async listPullRequestReviews(repository, pullRequestNumber) {
+    const reviews = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.#request(
+        "GET",
+        `/repos/${repositoryPath2(repository)}/pulls/${pullRequestNumber}/reviews?per_page=100&page=${page}`
+      );
+      reviews.push(...batch.map(normalizePullRequestReview));
+      if (batch.length < 100) return reviews;
+    }
+  }
   async resolveReviewThreads(repository, pullRequestNumber, reviewCommentIds) {
     if (reviewCommentIds.length === 0) return;
     const targetIds = new Set(reviewCommentIds);

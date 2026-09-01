@@ -324,6 +324,17 @@ var GitHubClient = class {
     );
     return normalizePullRequestReview(review);
   }
+  async listPullRequestReviews(repository, pullRequestNumber) {
+    const reviews = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.#request(
+        "GET",
+        `/repos/${repositoryPath2(repository)}/pulls/${pullRequestNumber}/reviews?per_page=100&page=${page}`
+      );
+      reviews.push(...batch.map(normalizePullRequestReview));
+      if (batch.length < 100) return reviews;
+    }
+  }
   async resolveReviewThreads(repository, pullRequestNumber, reviewCommentIds) {
     if (reviewCommentIds.length === 0) return;
     const targetIds = new Set(reviewCommentIds);
@@ -6775,7 +6786,13 @@ var reviewFixSubmissionSchema = object({
 async function prepareReviewFix(repository, pullRequestNumber, reviewId, dependencies) {
   assertAllowedRepository(repository, dependencies.allowedRepository);
   requireReviewBotIdentity(dependencies);
-  const [pullRequest, review, conversationComments, reviewComments] = await Promise.all([
+  const [
+    pullRequest,
+    triggeringReview,
+    conversationComments,
+    reviewComments,
+    reviews
+  ] = await Promise.all([
     dependencies.provider.getPullRequest(repository, pullRequestNumber),
     dependencies.provider.getPullRequestReview(
       repository,
@@ -6783,28 +6800,38 @@ async function prepareReviewFix(repository, pullRequestNumber, reviewId, depende
       reviewId
     ),
     dependencies.provider.listComments(repository, pullRequestNumber),
-    dependencies.provider.listReviewComments(repository, pullRequestNumber)
+    dependencies.provider.listReviewComments(repository, pullRequestNumber),
+    dependencies.provider.listPullRequestReviews(repository, pullRequestNumber)
   ]);
   const reason = ineligibleReason2(pullRequest, repository, dependencies);
   if (reason) return skipped2(repository, pullRequestNumber, reason);
   const reviewReason = ineligibleReviewReason(
-    review,
+    triggeringReview,
     pullRequest,
     dependencies.policy
   );
   if (reviewReason) return skipped2(repository, pullRequestNumber, reviewReason);
   const state = reviewState(conversationComments, dependencies);
-  if (review.id <= state.reviewCursor) {
+  if (triggeringReview.id <= state.reviewCursor) {
     return skipped2(
       repository,
       pullRequestNumber,
       "Pull Request Review was already processed"
     );
   }
-  const findings = findingsForReview(review, reviewComments);
+  const eligibleReviews = eligibleReviewsSince(
+    reviews,
+    pullRequest,
+    dependencies.policy,
+    state.reviewCursor
+  );
+  const findings = findingsForReviews(eligibleReviews, reviewComments);
   if (findings.length === 0) {
     return skipped2(repository, pullRequestNumber, "Review has no findings");
   }
+  const batchReviewId = Math.max(
+    ...eligibleReviews.map((eligibleReview) => eligibleReview.id)
+  );
   if (findings.length > dependencies.policy.maxReviewComments) {
     if (dependencies.apply) {
       await upsertReviewState(
@@ -6908,7 +6935,7 @@ async function prepareReviewFix(repository, pullRequestNumber, reviewId, depende
     branch: prepared.branch,
     baseBranch: prepared.baseBranch,
     expectedHeadSha: prepared.baseCommit,
-    reviewId: review.id,
+    reviewId: batchReviewId,
     reviewFingerprint: fingerprintFindings(findings),
     previousReviewCursor: state.reviewCursor,
     previousIterations: state.iterations,
@@ -6921,29 +6948,28 @@ async function applyReviewFix(repository, pullRequestNumber, submissionInput, de
   assertAllowedRepository(repository, dependencies.allowedRepository);
   requireReviewBotIdentity(dependencies);
   const submission = reviewFixSubmissionSchema.parse(submissionInput);
-  const [pullRequest, review, conversationComments, reviewComments] = await Promise.all([
+  const [pullRequest, conversationComments, reviewComments, reviews] = await Promise.all([
     dependencies.provider.getPullRequest(repository, pullRequestNumber),
-    dependencies.provider.getPullRequestReview(
-      repository,
-      pullRequestNumber,
-      submission.reviewId
-    ),
     dependencies.provider.listComments(repository, pullRequestNumber),
-    dependencies.provider.listReviewComments(repository, pullRequestNumber)
+    dependencies.provider.listReviewComments(repository, pullRequestNumber),
+    dependencies.provider.listPullRequestReviews(
+      repository,
+      pullRequestNumber
+    )
   ]);
   const reason = ineligibleReason2(pullRequest, repository, dependencies);
   if (reason) throw new Error(reason);
-  const reviewReason = ineligibleReviewReason(
-    review,
-    pullRequest,
-    dependencies.policy
-  );
-  if (reviewReason) throw new Error(reviewReason);
   if (pullRequest.headSha !== submission.expectedHeadSha) {
     throw new Error("Pull Request head changed after review fix preparation");
   }
+  const eligibleReviews = eligibleReviewsSince(
+    reviews,
+    pullRequest,
+    dependencies.policy,
+    submission.previousReviewCursor
+  ).filter((eligibleReview) => eligibleReview.id <= submission.reviewId);
   const expectedKeys = submission.findingRefs.map(findingKey);
-  const preparedFindings = findingsForReview(review, reviewComments);
+  const preparedFindings = findingsForReviews(eligibleReviews, reviewComments);
   const persistedState = reviewState(conversationComments, dependencies);
   if (new Set(expectedKeys).size !== expectedKeys.length || preparedFindings.length !== submission.findingRefs.length || preparedFindings.some(
     (value) => !expectedKeys.includes(findingKey(value))
@@ -7152,6 +7178,40 @@ async function failReviewFix(repository, pullRequestNumber, reviewCursor, iterat
     outcome: "failed"
   };
 }
+async function listPendingReviewFixes(repository, dependencies) {
+  assertAllowedRepository(repository, dependencies.allowedRepository);
+  const openPullRequests = await dependencies.provider.listOpenPullRequests(repository);
+  const pending = [];
+  for (const pullRequest of openPullRequests) {
+    if (ineligibleReason2(pullRequest, repository, dependencies)) continue;
+    const [conversationComments, reviewComments, reviews] = await Promise.all([
+      dependencies.provider.listComments(repository, pullRequest.number),
+      dependencies.provider.listReviewComments(repository, pullRequest.number),
+      dependencies.provider.listPullRequestReviews(
+        repository,
+        pullRequest.number
+      )
+    ]);
+    const state = reviewState(conversationComments, dependencies);
+    const eligibleReviews = eligibleReviewsSince(
+      reviews,
+      pullRequest,
+      dependencies.policy,
+      state.reviewCursor
+    );
+    if (findingsForReviews(eligibleReviews, reviewComments).length === 0) {
+      continue;
+    }
+    pending.push({
+      repository,
+      pullRequestNumber: pullRequest.number,
+      reviewId: Math.max(
+        ...eligibleReviews.map((eligibleReview) => eligibleReview.id)
+      )
+    });
+  }
+  return { ok: true, pending };
+}
 function findingsForReview(review, reviewComments) {
   const findings = [];
   if (review.body.trim()) {
@@ -7176,6 +7236,13 @@ function findingsForReview(review, reviewComments) {
       comment
     }))
   );
+  return findings.sort(compareSourcedFindings);
+}
+function findingsForReviews(reviews, reviewComments) {
+  const findings = [];
+  for (const review of reviews) {
+    findings.push(...findingsForReview(review, reviewComments));
+  }
   return findings.sort(compareSourcedFindings);
 }
 function ineligibleReason2(pullRequest, repository, dependencies) {
@@ -7213,6 +7280,9 @@ function ineligibleReviewReason(review, pullRequest, policy) {
     return "Pull Request Review targets a stale head";
   }
   return void 0;
+}
+function eligibleReviewsSince(reviews, pullRequest, policy, cursor) {
+  return reviews.filter((review) => review.id > cursor).filter((review) => !ineligibleReviewReason(review, pullRequest, policy)).sort((left, right) => left.id - right.id);
 }
 function trustedReviewerAssociation(value) {
   return ["owner", "member", "collaborator"].includes(
@@ -8054,7 +8124,7 @@ async function main() {
       apply,
       process.env
     );
-  } else {
+  } else if (options.command !== "list-pending-reviews") {
     assertBoundReviewTarget(
       options.repository,
       options.pullRequestNumber,
@@ -8094,6 +8164,15 @@ async function main() {
     apply,
     ...process.env.GITHUB_BOT_LOGIN ? { botLogin: process.env.GITHUB_BOT_LOGIN } : {}
   };
+  if (options.command === "list-pending-reviews") {
+    const result2 = await listPendingReviewFixes(
+      options.repository,
+      dependencies
+    );
+    process.stdout.write(`${JSON.stringify(result2, null, 2)}
+`);
+    return;
+  }
   const result = options.command === "prepare" ? await prepareDraftPr(
     options.repository,
     options.issueNumber,
@@ -8176,7 +8255,7 @@ async function loadPolicy() {
 }
 function parseArguments(args) {
   const command = args.shift();
-  if (command !== "prepare" && command !== "inspect-validation" && command !== "apply" && command !== "fail" && command !== "prepare-review" && command !== "apply-review" && command !== "fail-review" && command !== "prepare-ci" && command !== "apply-ci" && command !== "fail-ci") {
+  if (command !== "prepare" && command !== "inspect-validation" && command !== "apply" && command !== "fail" && command !== "prepare-review" && command !== "apply-review" && command !== "fail-review" && command !== "list-pending-reviews" && command !== "prepare-ci" && command !== "apply-ci" && command !== "fail-ci") {
     throw new Error("invalid Draft PR tool command");
   }
   let repository = "";

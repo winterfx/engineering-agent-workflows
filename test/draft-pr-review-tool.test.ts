@@ -8,6 +8,7 @@ import type {
 } from "../src/draft-pr/provider.js";
 import {
   applyReviewFix,
+  listPendingReviewFixes,
   prepareReviewFix,
   type ReviewFixDependencies,
 } from "../src/draft-pr/review-tool.js";
@@ -76,6 +77,10 @@ class FakeProvider implements ReviewFixProvider {
     htmlUrl: `https://github.test/${repository}/pull/${pullRequestNumber}#pullrequestreview-${reviewId}`,
     submittedAt: "2026-07-27T01:00:00Z",
   };
+  // Overrides `[this.review]` for `listPullRequestReviews` when a test needs
+  // to simulate more than one Review already visible on the Pull Request
+  // (e.g. a burst of monkeyscan[bot] reviews arriving within seconds).
+  reviews: PullRequestReview[] | undefined;
   comments: IssueComment[] = [
     {
       id: 12,
@@ -150,6 +155,9 @@ class FakeProvider implements ReviewFixProvider {
   }
   async getPullRequestReview(): Promise<PullRequestReview> {
     return structuredClone(this.review);
+  }
+  async listPullRequestReviews(): Promise<PullRequestReview[]> {
+    return structuredClone(this.reviews ?? [this.review]);
   }
   async resolveReviewThreads(
     _repository: string,
@@ -305,6 +313,55 @@ describe("Draft PR requested-changes review fix", () => {
     expect(provider.reviewReplyCalls[0]?.body).toContain(
       "Addressed by the Draft PR Agent",
     );
+  });
+
+  it("sweeps every eligible Review since the cursor, not just the one that triggered the run", async () => {
+    // Reproduces the monkeyscan[bot] burst: several independent Reviews land
+    // seconds apart, and only whichever run wins the per-Pull-Request
+    // workspace lock actually executes. That run must not limit itself to
+    // the single Review that happened to trigger it.
+    const provider = new FakeProvider();
+    const secondReview: PullRequestReview = {
+      id: 701,
+      body: "",
+      state: "CHANGES_REQUESTED",
+      commitId: headSha,
+      authorAssociation: "MEMBER",
+      user: reviewer,
+    };
+    provider.reviews = [provider.review, secondReview];
+    const workspace = new FakeWorkspace();
+    const deps = dependencies(provider, workspace);
+
+    const prepared = await prepareReviewFix(
+      repository,
+      pullRequestNumber,
+      reviewId,
+      deps,
+    );
+
+    expect(
+      prepared.findings
+        ?.map((finding) => finding.commentId)
+        .sort((a, b) => a - b),
+    ).toEqual([10, 11, 20, reviewId]);
+    expect(prepared.reviewId).toBe(701);
+    expect(workspace.preparedReviewCalls).toBe(1);
+
+    const result = await applyReviewFix(
+      repository,
+      pullRequestNumber,
+      submission(prepared),
+      deps,
+    );
+
+    expect(result.outcome).toBe("fixed");
+    expect(
+      provider.reviewReplyCalls
+        .map((call) => call.commentId)
+        .sort((a, b) => a - b),
+    ).toEqual([10, 11, 20]);
+    expect(provider.resolvedThreadCalls).toEqual([[10, 11, 20]]);
   });
 
   it("does not treat ordinary PR conversation comments as findings", async () => {
@@ -777,6 +834,65 @@ describe("Draft PR requested-changes review fix", () => {
     expect(result.outcome).toBe("fixed");
     expect(provider.reviewReplyCalls).toHaveLength(2);
     expect(provider.resolvedThreadCalls).toEqual([]);
+  });
+});
+
+describe("listPendingReviewFixes", () => {
+  it("reports a Draft Pull Request with an eligible Review ahead of the cursor", async () => {
+    const provider = new FakeProvider();
+    const deps = dependencies(provider, new FakeWorkspace());
+
+    const result = await listPendingReviewFixes(repository, deps);
+
+    expect(result.pending).toEqual([
+      { repository, pullRequestNumber, reviewId },
+    ]);
+  });
+
+  it("reports the highest id across several Reviews still ahead of the cursor", async () => {
+    const provider = new FakeProvider();
+    provider.reviews = [
+      provider.review,
+      {
+        id: 701,
+        body: "A second, independently submitted Review.",
+        state: "CHANGES_REQUESTED",
+        commitId: headSha,
+        authorAssociation: "MEMBER",
+        user: reviewer,
+      },
+    ];
+    const deps = dependencies(provider, new FakeWorkspace());
+
+    const result = await listPendingReviewFixes(repository, deps);
+
+    expect(result.pending).toEqual([
+      { repository, pullRequestNumber, reviewId: 701 },
+    ]);
+  });
+
+  it("omits a Pull Request whose Review was already processed", async () => {
+    const provider = new FakeProvider();
+    provider.comments.push({
+      id: 1000,
+      body: `<!-- engineering-agent-workflows:review-fix:v3 review=${reviewId} iterations=1 head=${headSha} status=fixed -->\n## Review follow-up`,
+      user: { login: botLogin, type: "Bot" },
+    });
+    const deps = dependencies(provider, new FakeWorkspace());
+
+    const result = await listPendingReviewFixes(repository, deps);
+
+    expect(result.pending).toEqual([]);
+  });
+
+  it("omits a Pull Request that is not a bot-managed Draft", async () => {
+    const provider = new FakeProvider();
+    provider.pullRequest.draft = false;
+    const deps = dependencies(provider, new FakeWorkspace());
+
+    const result = await listPendingReviewFixes(repository, deps);
+
+    expect(result.pending).toEqual([]);
   });
 });
 

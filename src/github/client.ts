@@ -185,6 +185,21 @@ export class GitHubClient implements CiFixProvider, ReviewFixProvider {
     return normalizePullRequestReview(review);
   }
 
+  async listPullRequestReviews(
+    repository: string,
+    pullRequestNumber: number,
+  ): Promise<PullRequestReview[]> {
+    const reviews: PullRequestReview[] = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.#request<GitHubPullRequestReviewAPI[]>(
+        "GET",
+        `/repos/${repositoryPath(repository)}/pulls/${pullRequestNumber}/reviews?per_page=100&page=${page}`,
+      );
+      reviews.push(...batch.map(normalizePullRequestReview));
+      if (batch.length < 100) return reviews;
+    }
+  }
+
   async resolveReviewThreads(
     repository: string,
     pullRequestNumber: number,

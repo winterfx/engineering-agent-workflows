@@ -12,6 +12,7 @@ import { draftPrPolicySchema, type DraftPrPolicy } from "./policy.js";
 import {
   applyReviewFix,
   failReviewFix,
+  listPendingReviewFixes,
   prepareReviewFix,
 } from "./review-tool.js";
 import { assertAllowedRepository } from "./repository.js";
@@ -31,6 +32,7 @@ interface CLIOptions {
     | "prepare-review"
     | "apply-review"
     | "fail-review"
+    | "list-pending-reviews"
     | "prepare-ci"
     | "apply-ci"
     | "fail-ci";
@@ -65,7 +67,7 @@ async function main(): Promise<void> {
       apply,
       process.env,
     );
-  } else {
+  } else if (options.command !== "list-pending-reviews") {
     assertBoundReviewTarget(
       options.repository,
       options.pullRequestNumber!,
@@ -115,6 +117,14 @@ async function main(): Promise<void> {
       : {}),
   };
 
+  if (options.command === "list-pending-reviews") {
+    const result = await listPendingReviewFixes(
+      options.repository,
+      dependencies,
+    );
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
   const result =
     options.command === "prepare"
       ? await prepareDraftPr(
@@ -223,6 +233,7 @@ function parseArguments(args: string[]): CLIOptions {
     command !== "prepare-review" &&
     command !== "apply-review" &&
     command !== "fail-review" &&
+    command !== "list-pending-reviews" &&
     command !== "prepare-ci" &&
     command !== "apply-ci" &&
     command !== "fail-ci"

@@ -465,6 +465,43 @@ describe("GitHubClient", () => {
     );
   });
 
+  it("lists every Pull Request Review, not just the one that triggered a run", async () => {
+    const requests: RecordedRequest[] = [];
+    const client = new GitHubClient({
+      baseUrl: "https://github.test/api",
+      fetch: recordingFetch(requests, () =>
+        jsonResponse([
+          {
+            id: 700,
+            body: "",
+            state: "COMMENTED",
+            commit_id: "a".repeat(40),
+            author_association: "NONE",
+            user: { login: "monkeyscan[bot]", id: 900, type: "Bot" },
+          },
+          {
+            id: 701,
+            body: "",
+            state: "COMMENTED",
+            commit_id: "a".repeat(40),
+            author_association: "NONE",
+            user: { login: "monkeyscan[bot]", id: 900, type: "Bot" },
+          },
+        ]),
+      ),
+    });
+
+    const reviews = await client.listPullRequestReviews(
+      "chaitin/agent-compose",
+      440,
+    );
+
+    expect(reviews.map((review) => review.id)).toEqual([700, 701]);
+    expect(requests[0]?.url).toBe(
+      "https://github.test/api/repos/chaitin/agent-compose/pulls/440/reviews?per_page=100&page=1",
+    );
+  });
+
   it("replies to an inline Pull Request Review comment", async () => {
     const requests: RecordedRequest[] = [];
     const client = new GitHubClient({
